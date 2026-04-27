@@ -1,0 +1,24 @@
+{
+  "name": "@pointer/queue",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "echo 'lint: skip'",
+    "test": "echo 'test: skip'"
+  },
+  "dependencies": {
+    "@pointer/shared": "workspace:*",
+    "bullmq": "^5.34.1",
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

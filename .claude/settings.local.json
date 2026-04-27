@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm install *)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(DATABASE_URL='postgresql://x:x@localhost:1/x' npx drizzle-kit generate --custom --name campaigns_extension)",
+      "Bash(DATABASE_URL='postgresql://x:x@localhost:1/x' NODE_OPTIONS='--import tsx' npx drizzle-kit generate --custom --name campaigns_extension)",
+      "Bash(DATABASE_URL='postgresql://x:x@localhost:1/x' NODE_OPTIONS='--import tsx' npx drizzle-kit generate --name campaigns_extension)",
+      "Bash(pnpm -r typecheck)",
+      "WebFetch(domain:docs.uazapi.com)",
+      "WebFetch(domain:free.uazapi.com)",
+      "WebFetch(domain:uazapi.com)",
+      "WebSearch",
+      "WebFetch(domain:documenter.getpostman.com)"
+    ]
+  }
+}

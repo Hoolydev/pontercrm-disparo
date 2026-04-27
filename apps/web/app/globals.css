@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --pi-bg: #101010;
+    --pi-primary: #157aff;
+    --pi-primary-soft: rgba(21, 122, 255, 0.18);
+    --pi-accent: #31ba96;
+    --pi-warn: #f59e0b;
+    --pi-danger: #ef4444;
+    --pi-card-shadow: 0 2px 40px rgba(0, 0, 0, 0.35);
+  }
+
+  html, body {
+    font-family: var(--font-poppins), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+
+  /* Dark scrollbar tuned to match the floating-card aesthetic */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(120, 120, 140, 0.25); border-radius: 10px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(120, 120, 140, 0.4); }
+}
+
+@layer components {
+  .pi-shell { display: flex; height: 100vh; overflow: hidden; background: var(--pi-bg); }
+  .pi-sidebar-wrap { flex-shrink: 0; transition: width 0.2s ease; }
+  .pi-content-card {
+    flex: 1;
+    margin: 12px 12px 12px 0;
+    border-radius: 20px;
+    background: #fff;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: var(--pi-card-shadow);
+    min-width: 0;
+  }
+
+  @media (max-width: 900px) {
+    .pi-sidebar-wrap { width: 58px !important; }
+    .pi-content-card { margin: 8px 8px 8px 0 !important; border-radius: 14px !important; }
+  }
+  @media (max-width: 600px) {
+    .pi-shell { flex-direction: column !important; }
+    .pi-sidebar-wrap { width: 100% !important; height: 58px !important; flex-direction: row; padding: 0 8px !important; }
+    .pi-content-card { margin: 0 !important; border-radius: 0 !important; height: calc(100vh - 58px) !important; }
+  }
+}

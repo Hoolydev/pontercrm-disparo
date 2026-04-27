@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Web (Next.js)",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@pointer/web", "run", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "API (Fastify)",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@pointer/api", "run", "dev"],
+      "port": 3333
+    },
+    {
+      "name": "Worker (BullMQ)",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@pointer/worker", "run", "dev"],
+      "port": 0
+    }
+  ]
+}

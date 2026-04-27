@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "src/check_triggers.ts",
+    "src/test_capacity.ts",
+    "src/test_decay.ts",
+    "src/test_followup.ts",
+    "src/test_watchdog.ts"
+  ]
+}

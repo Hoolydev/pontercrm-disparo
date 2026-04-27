@@ -1,0 +1,1 @@
+ALTER TABLE "brokers" ADD COLUMN "max_active_leads" integer;
