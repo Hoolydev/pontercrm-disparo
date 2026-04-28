@@ -13,7 +13,10 @@ const schema = z.object({
   ANTHROPIC_API_KEY: z.string().optional()
 });
 
-const parsed = schema.safeParse(process.env);
+const parsed = schema.safeParse({
+  ...process.env,
+  API_PORT: process.env.API_PORT || process.env.PORT || undefined
+});
 if (!parsed.success) {
   console.error("[config] invalid env:", parsed.error.flatten().fieldErrors);
   process.exit(1);
