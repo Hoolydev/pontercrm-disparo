@@ -1,25 +1,26 @@
 {
-  "name": "@pointer/shared",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
-  "exports": {
-    ".": "./src/index.ts",
-    "./llm-models": "./src/llm-models.ts",
-    "./roles": "./src/roles.ts",
-    "./phone": "./src/phone.ts"
-  },
-  "scripts": {
-    "typecheck": "tsc --noEmit",
-    "lint": "echo 'lint: skip'",
-    "test": "echo 'test: skip'"
-  },
-  "dependencies": {
-    "zod": "^3.24.1"
-  },
-  "devDependencies": {
-    "typescript": "^5.7.2"
-  }
+    "name": "@pointer/shared",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+          ".": "./dist/index.js",
+          "./llm-models": "./dist/llm-models.js",
+          "./roles": "./dist/roles.js",
+          "./phone": "./dist/phone.js"
+    },
+    "scripts": {
+          "build": "tsc -p tsconfig.json",
+          "typecheck": "tsc --noEmit",
+          "lint": "echo 'lint: skip'",
+          "test": "echo 'test: skip'"
+    },
+    "dependencies": {
+          "zod": "^3.24.1"
+    },
+    "devDependencies": {
+          "typescript": "^5.7.2"
+    }
 }
