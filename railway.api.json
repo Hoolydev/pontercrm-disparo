@@ -5,7 +5,10 @@
     "buildCommand": "corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm --filter @pointer/api... build"
   },
   "deploy": {
-    "preDeployCommand": ["pnpm --filter @pointer/db run migrate:prod"],
+    "preDeployCommand": [
+      "pnpm --filter @pointer/db run migrate:prod",
+      "pnpm --filter @pointer/db run seed:prod"
+    ],
     "startCommand": "pnpm --filter @pointer/api start",
     "healthcheckPath": "/healthz",
     "healthcheckTimeout": 30,
