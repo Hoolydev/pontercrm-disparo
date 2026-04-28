@@ -6,7 +6,7 @@
   "main": "./src/server.ts",
   "scripts": {
     "dev": "tsx watch --env-file=../../.env src/server.ts",
-    "start": "node dist/server.js",
+    "start": "tsx src/server.ts",
     "build": "tsc -p tsconfig.build.json",
     "smoke": "tsx --env-file=../../.env src/scripts/smoke-200.ts",
     "typecheck": "tsc --noEmit",
@@ -37,6 +37,7 @@
     "pdfkit": "^0.15.1",
     "pino": "^9.5.0",
     "pino-pretty": "^13.0.0",
+    "tsx": "^4.19.2",
     "undici": "^7.1.0",
     "xlsx": "^0.18.5",
     "zod": "^3.24.1"
@@ -44,7 +45,6 @@
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/pdfkit": "^0.13.5",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }
