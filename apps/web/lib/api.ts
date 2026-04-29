@@ -72,7 +72,13 @@ export type ConversationSummary = {
   };
   assignedBroker: { id: string; displayName: string } | null;
   campaign: CampaignSummary | null;
-  messages: { id: string; content: string; senderType: string; createdAt: string }[];
+  messages: {
+    id: string;
+    content: string;
+    senderType: string;
+    createdAt: string;
+    status: string;
+  }[];
 };
 
 export type Message = {

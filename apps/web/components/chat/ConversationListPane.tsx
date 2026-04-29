@@ -1,20 +1,32 @@
 "use client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { api, type ConversationSummary } from "../../lib/api";
 import { getToken } from "../../lib/session";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3333";
 
+type Filter = "all" | "failed";
+
 export default function ConversationListPane({ activeId }: { activeId?: string }) {
   const qc = useQueryClient();
+  const [filter, setFilter] = useState<Filter>("all");
 
   const { data, isLoading } = useQuery({
-    queryKey: ["conversations"],
-    queryFn: () => api.get<{ conversations: ConversationSummary[] }>("/conversations?limit=5000").then((r) => r.conversations),
+    queryKey: ["conversations", filter],
+    queryFn: () => {
+      const url =
+        filter === "failed"
+          ? "/conversations?failed=true&limit=5000"
+          : "/conversations?limit=5000";
+      return api.get<{ conversations: ConversationSummary[]; failedCount: number }>(url);
+    },
     refetchInterval: 30_000
   });
+
+  const conversations = data?.conversations ?? [];
+  const failedCount = data?.failedCount ?? 0;
 
   // SSE for live updates
   useEffect(() => {
@@ -42,15 +54,58 @@ export default function ConversationListPane({ activeId }: { activeId?: string }
         {isLoading && <span className="text-xs text-neutral-400">…</span>}
       </div>
 
+      <div className="flex gap-1 border-b border-neutral-100 px-2 py-2">
+        <FilterTab
+          label="Todas"
+          active={filter === "all"}
+          onClick={() => setFilter("all")}
+        />
+        <FilterTab
+          label={`Falhas${failedCount > 0 ? ` (${failedCount})` : ""}`}
+          active={filter === "failed"}
+          onClick={() => setFilter("failed")}
+          variant="failed"
+        />
+      </div>
+
       <div className="flex-1 overflow-y-auto">
-        {data?.length === 0 && (
-          <p className="px-4 py-8 text-center text-sm text-neutral-400">Nenhuma conversa ainda</p>
+        {conversations.length === 0 && (
+          <p className="px-4 py-8 text-center text-sm text-neutral-400">
+            {filter === "failed" ? "Nenhuma falha" : "Nenhuma conversa ainda"}
+          </p>
         )}
-        {data?.map((c) => (
+        {conversations.map((c) => (
           <ConversationRow key={c.id} conv={c} active={c.id === activeId} />
         ))}
       </div>
     </div>
+  );
+}
+
+function FilterTab({
+  label,
+  active,
+  onClick,
+  variant
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  variant?: "failed";
+}) {
+  const activeCls =
+    variant === "failed" ? "bg-red-50 text-red-700" : "bg-blue-50 text-blue-700";
+  const inactiveCls = "text-neutral-500 hover:bg-neutral-50";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
+        active ? activeCls : inactiveCls
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -81,6 +136,11 @@ function ConversationRow({ conv, active }: { conv: ConversationSummary; active: 
         <p className="mt-0.5 truncate text-xs text-neutral-500">{last?.content ?? "—"}</p>
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
           <StatusBadge status={conv.status} aiPaused={conv.aiPaused} />
+          {last?.status === "failed" && (
+            <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700">
+              falhou
+            </span>
+          )}
           {conv.campaign && (
             <span
               className="rounded-full bg-purple-50 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 max-w-[120px] truncate"

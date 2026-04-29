@@ -10,47 +10,72 @@ import { getDb } from "../db.js";
 export async function registerConversations(app: FastifyInstance) {
   const auth = { preHandler: [app.authenticate] };
 
-  // GET /conversations?limit=
-  app.get<{ Querystring: { limit?: string } }>("/conversations", auth, async (req) => {
-    const { sub: userId, role } = req.user;
-    const db = getDb();
+  // GET /conversations?limit=&failed=true
+  app.get<{ Querystring: { limit?: string; failed?: string } }>(
+    "/conversations",
+    auth,
+    async (req) => {
+      const { sub: userId, role } = req.user;
+      const db = getDb();
 
-    let brokerId: string | null = null;
-    if (role === "broker") {
-      const broker = await db.query.brokers.findFirst({
-        where: eq(schema.brokers.userId, userId)
-      });
-      brokerId = broker?.id ?? null;
-    }
-
-    const requested = req.query.limit ? parseInt(req.query.limit, 10) : 60;
-    const limit = Math.min(Math.max(Number.isFinite(requested) ? requested : 60, 1), 5000);
-
-    const rows = await db.query.conversations.findMany({
-      where: brokerId ? eq(schema.conversations.assignedBrokerId, brokerId) : undefined,
-      orderBy: [desc(schema.conversations.lastMessageAt)],
-      limit,
-      with: {
-        lead: {
-          columns: { id: true, name: true, phone: true, pipelineStageId: true },
-          with: {
-            pipelineStage: {
-              columns: { id: true, name: true, category: true, color: true }
-            }
-          }
-        },
-        assignedBroker: { columns: { id: true, displayName: true } },
-        campaign: { columns: { id: true, name: true, status: true } },
-        messages: {
-          orderBy: [desc(schema.messages.createdAt)],
-          limit: 1,
-          columns: { id: true, content: true, senderType: true, createdAt: true }
-        }
+      let brokerId: string | null = null;
+      if (role === "broker") {
+        const broker = await db.query.brokers.findFirst({
+          where: eq(schema.brokers.userId, userId)
+        });
+        brokerId = broker?.id ?? null;
       }
-    });
 
-    return { conversations: rows };
-  });
+      const requested = req.query.limit ? parseInt(req.query.limit, 10) : 60;
+      const limit = Math.min(Math.max(Number.isFinite(requested) ? requested : 60, 1), 5000);
+      const onlyFailed = req.query.failed === "true";
+
+      const conditions = [];
+      if (brokerId) conditions.push(eq(schema.conversations.assignedBrokerId, brokerId));
+      if (onlyFailed) {
+        conditions.push(
+          sql`EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = ${schema.conversations.id} AND m.status = 'failed')`
+        );
+      }
+
+      const failedCountRow = await db.execute<{ n: string }>(sql`
+        SELECT COUNT(DISTINCT m.conversation_id) AS n
+        FROM messages m
+        WHERE m.status = 'failed'
+        ${
+          brokerId
+            ? sql`AND EXISTS (SELECT 1 FROM conversations c WHERE c.id = m.conversation_id AND c.assigned_broker_id = ${brokerId})`
+            : sql``
+        }
+      `);
+      const failedCount = Number(failedCountRow.rows[0]?.n ?? 0);
+
+      const rows = await db.query.conversations.findMany({
+        where: conditions.length ? and(...conditions) : undefined,
+        orderBy: [desc(schema.conversations.lastMessageAt)],
+        limit,
+        with: {
+          lead: {
+            columns: { id: true, name: true, phone: true, pipelineStageId: true },
+            with: {
+              pipelineStage: {
+                columns: { id: true, name: true, category: true, color: true }
+              }
+            }
+          },
+          assignedBroker: { columns: { id: true, displayName: true } },
+          campaign: { columns: { id: true, name: true, status: true } },
+          messages: {
+            orderBy: [desc(schema.messages.createdAt)],
+            limit: 1,
+            columns: { id: true, content: true, senderType: true, createdAt: true, status: true }
+          }
+        }
+      });
+
+      return { conversations: rows, failedCount };
+    }
+  );
 
   // GET /conversations/:id
   app.get<{ Params: { id: string } }>("/conversations/:id", auth, async (req, reply) => {
