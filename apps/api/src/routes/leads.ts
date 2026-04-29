@@ -19,12 +19,14 @@ export async function registerLeads(app: FastifyInstance) {
       brokerId?: string;
       campaignId?: string;
       page?: string;
+      limit?: string;
     };
   }>("/leads", auth, async (req) => {
-    const { stageId, search, brokerId, campaignId, page = "1" } = req.query;
+    const { stageId, search, brokerId, campaignId, page = "1", limit: rawLimit } = req.query;
     const { sub: userId, role } = req.user;
     const db = getDb();
-    const limit = 50;
+    const requested = rawLimit ? parseInt(rawLimit, 10) : 50;
+    const limit = Math.min(Math.max(Number.isFinite(requested) ? requested : 50, 1), 5000);
     const offset = (parseInt(page, 10) - 1) * limit;
 
     const conditions = [];

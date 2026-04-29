@@ -57,6 +57,7 @@ export default function LeadsKanbanPage() {
   const qs = new URLSearchParams();
   if (brokerFilter) qs.set("brokerId", brokerFilter);
   qs.set("page", "1");
+  qs.set("limit", "5000");
 
   const { data, isLoading } = useQuery({
     queryKey: ["leads-kanban", brokerFilter],
