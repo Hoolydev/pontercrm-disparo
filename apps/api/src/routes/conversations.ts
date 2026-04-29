@@ -10,8 +10,8 @@ import { getDb } from "../db.js";
 export async function registerConversations(app: FastifyInstance) {
   const auth = { preHandler: [app.authenticate] };
 
-  // GET /conversations
-  app.get("/conversations", auth, async (req) => {
+  // GET /conversations?limit=
+  app.get<{ Querystring: { limit?: string } }>("/conversations", auth, async (req) => {
     const { sub: userId, role } = req.user;
     const db = getDb();
 
@@ -23,10 +23,13 @@ export async function registerConversations(app: FastifyInstance) {
       brokerId = broker?.id ?? null;
     }
 
+    const requested = req.query.limit ? parseInt(req.query.limit, 10) : 60;
+    const limit = Math.min(Math.max(Number.isFinite(requested) ? requested : 60, 1), 5000);
+
     const rows = await db.query.conversations.findMany({
       where: brokerId ? eq(schema.conversations.assignedBrokerId, brokerId) : undefined,
       orderBy: [desc(schema.conversations.lastMessageAt)],
-      limit: 60,
+      limit,
       with: {
         lead: {
           columns: { id: true, name: true, phone: true, pipelineStageId: true },

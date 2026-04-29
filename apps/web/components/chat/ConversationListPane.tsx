@@ -12,7 +12,7 @@ export default function ConversationListPane({ activeId }: { activeId?: string }
 
   const { data, isLoading } = useQuery({
     queryKey: ["conversations"],
-    queryFn: () => api.get<{ conversations: ConversationSummary[] }>("/conversations").then((r) => r.conversations),
+    queryFn: () => api.get<{ conversations: ConversationSummary[] }>("/conversations?limit=5000").then((r) => r.conversations),
     refetchInterval: 30_000
   });
 
