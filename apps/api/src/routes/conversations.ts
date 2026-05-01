@@ -2,7 +2,7 @@ import { cancelPendingFollowups, markBrokerAccepted } from "@pointer/agent-engin
 import { schema } from "@pointer/db";
 import { getQueues } from "@pointer/queue";
 import { newId, sha256 } from "@pointer/shared";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db.js";
@@ -158,6 +158,100 @@ export async function registerConversations(app: FastifyInstance) {
       return reply.code(201).send({ messageId: msgId });
     }
   );
+
+  // POST /conversations/retry-failed
+  // Reenvia a última mensagem outbound falhada de cada conversa selecionada,
+  // distribuindo entre as instâncias escolhidas (round-robin) e enfileirando
+  // com delay incremental — anti-banimento.
+  const retrySchema = z.object({
+    conversationIds: z.array(z.string().uuid()).min(1).max(5000),
+    instanceIds: z.array(z.string().uuid()).min(1).max(20),
+    delaySeconds: z.number().int().min(10).max(300)
+  });
+  app.post("/conversations/retry-failed", auth, async (req, reply) => {
+    const { role } = req.user;
+    if (role !== "admin" && role !== "supervisor") return reply.forbidden();
+
+    const parsed = retrySchema.safeParse(req.body);
+    if (!parsed.success) return reply.badRequest(parsed.error.message);
+
+    const { conversationIds, instanceIds, delaySeconds } = parsed.data;
+    const db = getDb();
+
+    const instances = await db.query.whatsappInstances.findMany({
+      where: and(
+        inArray(schema.whatsappInstances.id, instanceIds),
+        eq(schema.whatsappInstances.active, true)
+      )
+    });
+    if (instances.length === 0) return reply.badRequest("no active instances");
+
+    const queues = getQueues();
+    let scheduled = 0;
+    let skipped = 0;
+    const now = Date.now();
+
+    for (let i = 0; i < conversationIds.length; i++) {
+      const convId = conversationIds[i]!;
+
+      const conv = await db.query.conversations.findFirst({
+        where: eq(schema.conversations.id, convId)
+      });
+      if (!conv) {
+        skipped++;
+        continue;
+      }
+
+      const lastFailed = await db.query.messages.findFirst({
+        where: and(
+          eq(schema.messages.conversationId, convId),
+          eq(schema.messages.status, "failed")
+        ),
+        orderBy: [desc(schema.messages.createdAt)]
+      });
+      if (!lastFailed?.content) {
+        skipped++;
+        continue;
+      }
+
+      const instance = instances[i % instances.length]!;
+      const msgId = newId();
+      const contentHash = sha256(`${lastFailed.content}|retry|${now}|${msgId}`);
+
+      await db.insert(schema.messages).values({
+        id: msgId,
+        conversationId: convId,
+        direction: "out",
+        senderType: "ai",
+        instanceId: instance.id,
+        content: lastFailed.content,
+        contentHash,
+        status: "queued"
+      });
+
+      if (conv.whatsappInstanceId !== instance.id) {
+        await db
+          .update(schema.conversations)
+          .set({ whatsappInstanceId: instance.id })
+          .where(eq(schema.conversations.id, convId));
+      }
+
+      await queues.outboundMessage.add(
+        `retry:${msgId}`,
+        { messageId: msgId, conversationId: convId },
+        { delay: scheduled * delaySeconds * 1000, jobId: `retry:${msgId}` }
+      );
+
+      scheduled++;
+    }
+
+    return reply.send({
+      scheduled,
+      skipped,
+      etaMinutes: Math.ceil((scheduled * delaySeconds) / 60),
+      instances: instances.map((i) => ({ id: i.id, number: i.number }))
+    });
+  });
 
   // POST /conversations/:id/takeover
   app.post<{ Params: { id: string } }>(
