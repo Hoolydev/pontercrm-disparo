@@ -84,7 +84,7 @@ export default function ConversationListPane({ activeId }: { activeId?: string }
   }
 
   return (
-    <div className="relative flex w-80 flex-col border-r border-neutral-200 bg-white">
+    <div className="flex h-full w-80 flex-col border-r border-neutral-200 bg-white">
       <div className="flex items-center justify-between border-b border-neutral-100 px-4 py-3">
         <h2 className="text-sm font-semibold text-neutral-800">Conversas</h2>
         {isLoading && <span className="text-xs text-neutral-400">…</span>}
@@ -131,7 +131,7 @@ export default function ConversationListPane({ activeId }: { activeId?: string }
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {conversations.length === 0 && (
           <p className="px-4 py-8 text-center text-sm text-neutral-400">
             {filter === "failed" ? "Nenhuma falha" : "Nenhuma conversa ainda"}
@@ -147,18 +147,17 @@ export default function ConversationListPane({ activeId }: { activeId?: string }
             onToggle={() => toggleId(c.id)}
           />
         ))}
-        {selecting && <div className="h-20" /> /* espaço pro footer não cobrir o último item */}
       </div>
 
-      {/* Footer fixo com ação de reenvio */}
+      {/* Footer fixo com ação de reenvio (flex item, sempre visível) */}
       {selecting && selectedIds.size > 0 && (
-        <div className="absolute inset-x-0 bottom-0 border-t border-red-200 bg-red-50 p-3 shadow-lg">
+        <div className="flex-shrink-0 border-t-2 border-red-300 bg-red-50 p-3 shadow-lg">
           <button
             type="button"
             onClick={() => setShowRetryModal(true)}
-            className="w-full rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700"
+            className="w-full rounded-md bg-red-600 px-3 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-red-700"
           >
-            Reenviar {selectedIds.size} mensagem(ns)
+            Reenviar {selectedIds.size} mensagem(ns) →
           </button>
         </div>
       )}

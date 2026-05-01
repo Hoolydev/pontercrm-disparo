@@ -8,7 +8,7 @@ export default async function ConversationPage({
 }) {
   const { id } = await params;
   return (
-    <div className="flex h-screen">
+    <div className="flex h-full">
       <ConversationListPane activeId={id} />
       <div className="flex-1 min-w-0">
         <ChatPane conversationId={id} />
