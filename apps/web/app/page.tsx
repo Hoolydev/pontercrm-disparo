@@ -122,6 +122,7 @@ function PropertyCard({ p }: { p: FeaturedProperty }) {
 }
 
 export default async function Home() {
+  // Forces a new build to invalidate cached redirects in Vercel/Railway
   const [sale, rent] = await Promise.all([getFeaturedSale(), getFeaturedRent()]);
   const featured: FeaturedProperty[] = [...sale.slice(0, 3), ...rent.slice(0, 3)];
 
