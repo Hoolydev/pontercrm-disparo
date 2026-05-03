@@ -7,6 +7,13 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_API_URL: process.env.API_URL ?? "http://localhost:3333"
   },
+  images: {
+    remotePatterns: [
+      { protocol: "https", hostname: "cdn.imoview.com.br" },
+      { protocol: "https", hostname: "www.pointerimoveis.net.br" },
+      { protocol: "https", hostname: "pointerimoveis.net.br" }
+    ]
+  },
   // The shared package uses ESM-style `.js` extensions in its TS imports
   // (required by Node's nodenext resolution). Webpack/turbopack don't know
   // about that mapping — so we tell them: when you see a `.js` import in

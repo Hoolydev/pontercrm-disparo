@@ -1,5 +1,6 @@
 import type { ToolRegistry } from "../types.js";
 import { scheduleVisit } from "./schedule-visit.js";
+import { sendProperty } from "./send-property.js";
 import { transferToBroker } from "./transfer-to-broker.js";
 import { updateStage } from "./update-stage.js";
 
@@ -7,16 +8,12 @@ import { updateStage } from "./update-stage.js";
  * Built-in tool registry. The engine merges this with any agent-specific
  * `behavior.tools_enabled` allow-list to decide what gets exposed to the LLM
  * and what handlers run on tool calls.
- *
- * Phase B status:
- *   - transfer_to_broker → fully implemented (executes handoff inline)
- *   - schedule_visit     → definition only; handler stubs to Phase C
- *   - update_stage       → definition only; handler stubs to Phase C
  */
 export const builtInTools: ToolRegistry = {
   [transferToBroker.definition.name]: transferToBroker,
   [scheduleVisit.definition.name]: scheduleVisit,
-  [updateStage.definition.name]: updateStage
+  [updateStage.definition.name]: updateStage,
+  [sendProperty.definition.name]: sendProperty
 };
 
 /** Legacy alias from Phase A: handoff_to_broker now resolves to transfer_to_broker. */

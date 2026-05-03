@@ -14,6 +14,7 @@
     "@pointer/shared": "workspace:*",
     "@tanstack/react-query": "^5.62.11",
     "@xyflow/react": "^12.10.2",
+    "lucide-react": "^1.14.0",
     "next": "^15.1.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

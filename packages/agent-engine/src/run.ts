@@ -403,7 +403,12 @@ export async function runAgent(
           { conversationId },
           { jobId: `summarize:${conversationId}` }
         )
-        .catch(() => {});
+        .catch((err) =>
+          logger.error(
+            { err, conversationId },
+            "engine: failed to enqueue memorySummarize"
+          )
+        );
     }
 
     // 4f. SSE
@@ -552,7 +557,12 @@ async function runToolCalls(opts: {
         .update(schema.toolExecutions)
         .set({ status: "error", error: msg })
         .where(eq(schema.toolExecutions.id, claimId))
-        .catch(() => {});
+        .catch((updErr) =>
+          logger.error(
+            { err: updErr, conversationId, toolName: tc.name, claimId },
+            "engine: failed to mark tool_execution as error"
+          )
+        );
       out.push({ toolName: tc.name, status: "error", error: msg });
     }
   }
