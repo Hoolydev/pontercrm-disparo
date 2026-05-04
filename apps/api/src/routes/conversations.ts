@@ -191,68 +191,86 @@ export async function registerConversations(app: FastifyInstance) {
     if (instances.length === 0) return reply.badRequest("no active instances");
 
     const queues = getQueues();
-    let scheduled = 0;
-    let skipped = 0;
     const now = Date.now();
 
-    for (let i = 0; i < conversationIds.length; i++) {
-      const convId = conversationIds[i]!;
-
-      const conv = await db.query.conversations.findFirst({
-        where: eq(schema.conversations.id, convId)
-      });
-      if (!conv) {
-        skipped++;
-        continue;
-      }
-
-      const lastFailed = await db.query.messages.findFirst({
-        where: and(
-          eq(schema.messages.conversationId, convId),
+    // One DISTINCT ON to fetch the latest failed message per conversation +
+    // the conversation's current sticky instance — replaces N×3 sequential
+    // queries with a single round-trip. Required: doing 964 conversations
+    // sequentially blew past the gateway timeout (~30-60s) and the
+    // mutation never resolved client-side.
+    const candidates = await db
+      .selectDistinctOn([schema.messages.conversationId], {
+        conversationId: schema.messages.conversationId,
+        content: schema.messages.content,
+        stickyInstanceId: schema.conversations.whatsappInstanceId
+      })
+      .from(schema.messages)
+      .innerJoin(
+        schema.conversations,
+        eq(schema.conversations.id, schema.messages.conversationId)
+      )
+      .where(
+        and(
+          inArray(schema.messages.conversationId, conversationIds),
           eq(schema.messages.status, "failed")
-        ),
-        orderBy: [desc(schema.messages.createdAt)]
-      });
-      if (!lastFailed?.content) {
-        skipped++;
-        continue;
-      }
+        )
+      )
+      .orderBy(schema.messages.conversationId, desc(schema.messages.createdAt));
 
+    const eligible = candidates.filter((c) => !!c.content);
+
+    type NewMsg = typeof schema.messages.$inferInsert;
+    const newMessages: NewMsg[] = [];
+    const jobs: {
+      name: string;
+      data: { messageId: string; conversationId: string };
+      opts: { delay: number; jobId: string };
+    }[] = [];
+    const stickyChanges: Record<string, string[]> = {};
+
+    eligible.forEach((row, i) => {
       const instance = instances[i % instances.length]!;
       const msgId = newId();
-      const contentHash = sha256(`${lastFailed.content}|retry|${now}|${msgId}`);
-
-      await db.insert(schema.messages).values({
+      const contentHash = sha256(`${row.content}|retry|${now}|${msgId}`);
+      newMessages.push({
         id: msgId,
-        conversationId: convId,
+        conversationId: row.conversationId,
         direction: "out",
         senderType: "ai",
         instanceId: instance.id,
-        content: lastFailed.content,
+        content: row.content,
         contentHash,
         status: "queued"
       });
-
-      if (conv.whatsappInstanceId !== instance.id) {
-        await db
-          .update(schema.conversations)
-          .set({ whatsappInstanceId: instance.id })
-          .where(eq(schema.conversations.id, convId));
+      jobs.push({
+        name: `retry-${msgId}`,
+        data: { messageId: msgId, conversationId: row.conversationId },
+        opts: { delay: i * delaySeconds * 1000, jobId: `retry-${msgId}` }
+      });
+      if (row.stickyInstanceId !== instance.id) {
+        (stickyChanges[instance.id] ??= []).push(row.conversationId);
       }
+    });
 
-      await queues.outboundMessage.add(
-        `retry:${msgId}`,
-        { messageId: msgId, conversationId: convId },
-        { delay: scheduled * delaySeconds * 1000, jobId: `retry-${msgId}` }
-      );
+    if (newMessages.length > 0) {
+      await db.insert(schema.messages).values(newMessages);
+    }
 
-      scheduled++;
+    for (const [instId, convIds] of Object.entries(stickyChanges)) {
+      await db
+        .update(schema.conversations)
+        .set({ whatsappInstanceId: instId })
+        .where(inArray(schema.conversations.id, convIds));
+    }
+
+    if (jobs.length > 0) {
+      await queues.outboundMessage.addBulk(jobs);
     }
 
     return reply.send({
-      scheduled,
-      skipped,
-      etaMinutes: Math.ceil((scheduled * delaySeconds) / 60),
+      scheduled: eligible.length,
+      skipped: conversationIds.length - eligible.length,
+      etaMinutes: Math.ceil((eligible.length * delaySeconds) / 60),
       instances: instances.map((i) => ({ id: i.id, number: i.number }))
     });
   });
