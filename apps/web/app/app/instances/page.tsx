@@ -112,6 +112,7 @@ export default function InstancesPage() {
   const [rate, setRate] = useState(20);
   const [fields, setFields] = useState<ProviderFields>({ ...PROVIDER_DEFAULTS.uazapi });
   const [qrData, setQrData] = useState<{ id: string; qr: string | null } | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   function changeProvider(p: Provider) {
     setProvider(p);
@@ -131,6 +132,8 @@ export default function InstancesPage() {
       setShowForm(false);
       setNumber("");
       setFields({ ...PROVIDER_DEFAULTS[provider] });
+      setSuccessMsg(`Instância ${number} criada com sucesso!`);
+      setTimeout(() => setSuccessMsg(null), 4000);
     }
   });
 
@@ -178,12 +181,18 @@ export default function InstancesPage() {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-lg font-semibold text-neutral-900">Instâncias WhatsApp</h1>
         <button
-          onClick={() => setShowForm(true)}
+          onClick={() => { setShowForm(true); setSuccessMsg(null); }}
           className="rounded-lg bg-pi-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90"
         >
           Nova instância
         </button>
       </div>
+
+      {successMsg && (
+        <div className="mb-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700 flex items-center gap-2">
+          <span>✓</span> {successMsg}
+        </div>
+      )}
 
       {showForm && (
         <div className="mb-6 rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
@@ -278,7 +287,11 @@ export default function InstancesPage() {
             </button>
           </div>
           {createMutation.isError && (
-            <p className="mt-2 text-xs text-red-500">{createMutation.error?.message}</p>
+            <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
+              {createMutation.error?.message?.includes("403") || createMutation.error?.message?.includes("Forbidden")
+                ? "Permissão negada: apenas administradores podem criar instâncias."
+                : createMutation.error?.message ?? "Erro ao criar instância."}
+            </div>
           )}
 
           <style jsx>{`
@@ -438,10 +451,15 @@ export default function InstancesPage() {
                 )}
             </div>
           ))}
-          {data?.instances.length === 0 && (
+          {data?.instances.filter(i => !(i.configJson as any).__error).length === 0 && (
             <p className="col-span-2 text-center text-sm text-neutral-400 py-10">
               Nenhuma instância configurada.
             </p>
+          )}
+          {data?.instances.some(i => (i.configJson as any).__error) && (
+            <div className="col-span-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
+              ⚠️ {data.instances.filter(i => (i.configJson as any).__error).length} instância(s) com erro de descriptografia — foram criadas com uma chave de criptografia diferente e precisam ser recriadas.
+            </div>
           )}
         </div>
       )}
