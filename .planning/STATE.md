@@ -14,11 +14,12 @@
 | Data | Slug | Status | Resumo |
 |------|------|--------|--------|
 | 2026-05-03 | backend-invariants | ✓ | Anti-padrão 4: POST /leads delega pra ingestLead (lead manual recebe IA) + POST/PATCH /appointments rejeita conflito ±30min |
+| 2026-05-03 | anti-padrao-1-service-layer | ✓ | Anti-padrão 1: changeLeadStage (refresca stage_entered_at) + transitionConversationStatus (matriz ai_active↔handed_off→closed) em packages/agent-engine/src/lib; 5 callers migrados (PATCH /leads/stage, POST /leads override, update_stage tool, transfer_to_broker tool, takeover/release) |
 
 ## Plano de refactor (5 anti-padrões — ordem de execução)
 
-1. ✅ **Anti-padrão 4** — invariantes no backend (esta task)
-2. ⏳ **Anti-padrão 1** — service layer (`leadService.changeStage`, `conversationService.transitionStatus`, `brokerQueueService.update`) com invariantes (ex: `stageEnteredAt` auto)
+1. ✅ **Anti-padrão 4** — invariantes no backend
+2. ✅ **Anti-padrão 1** — service layer (`changeLeadStage`, `transitionConversationStatus`). `brokerQueueService` descartado (sem callers admin de mutação)
 3. ⏳ **Anti-padrão 3** — `domain_events` table + `recordEvent()` chamado dentro dos services
 4. ⏳ **Anti-padrão 5** — reorganização do menu por entidade (CRM / Catálogo / Operação / Configuração)
 5. ⏳ **Anti-padrão 2** — de-duplicação de UI (Kanban/Lista filtros, Inbox/LeadDetail conversas) — sob demanda
@@ -33,4 +34,4 @@
 ## Como retomar
 
 - `/gsd-progress` para ver onde paramos.
-- Próxima ação recomendada: anti-padrão 1 (service layer). Pode ser `/gsd-quick` se for cirúrgico, ou `/gsd-plan-phase` se quiser fazer com discussão prévia.
+- Próxima ação recomendada: anti-padrão 3 (`domain_events` table + `recordEvent()` dentro dos services). `/gsd-plan-phase` faz mais sentido aqui — schema novo + integração transacional pede discussão prévia.
