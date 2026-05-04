@@ -15,10 +15,10 @@ type NavItemDef = {
   Icon: (p: SVGProps<SVGSVGElement>) => ReactElement;
 };
 
-const NAV: NavItemDef[] = [
+const CRM_NAV: NavItemDef[] = [
   { href: "/app/dashboard", label: "Dashboard", Icon: IconDashboard },
   { href: "/app/inbox", label: "Inbox", Icon: IconInbox },
-  { href: "/app/leads", label: "CRM", Icon: IconLeads },
+  { href: "/app/leads", label: "Leads", Icon: IconLeads },
   { href: "/app/campaigns", label: "Campanhas", Icon: IconCampaigns },
   { href: "/app/appointments", label: "Agendamentos", Icon: IconAppointments },
   { href: "/app/properties", label: "Captação", Icon: IconProperties }
@@ -27,10 +27,11 @@ const NAV: NavItemDef[] = [
 const OPS_NAV: NavItemDef[] = [
   { href: "/app/followups", label: "Cobranças", Icon: IconFollowups },
   { href: "/app/broker-queue", label: "Fila Corretor", Icon: IconBrokerQueue },
-  { href: "/app/sla-alerts", label: "Alertas SLA", Icon: IconAlerts }
+  { href: "/app/sla-alerts", label: "Alertas SLA", Icon: IconAlerts },
+  { href: "/app/metrics", label: "Métricas", Icon: IconMetrics }
 ];
 
-const ADMIN_NAV: NavItemDef[] = [
+const CONFIG_NAV: NavItemDef[] = [
   { href: "/app/agents", label: "Agentes", Icon: IconAgents },
   { href: "/app/pipelines", label: "Funis", Icon: IconPipelines },
   { href: "/app/instances", label: "Instâncias", Icon: IconInstances },
@@ -165,54 +166,28 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
         {/* Nav */}
         <nav className="flex-1 flex flex-col gap-0.5 overflow-y-auto overflow-x-hidden">
-          {NAV.map((n) => (
-            <SidebarLink
-              key={n.href}
-              {...n}
+          <NavSection
+            label="CRM"
+            items={CRM_NAV}
+            collapsed={collapsed}
+            pathname={pathname}
+            first
+          />
+          {isSupervisor && (
+            <NavSection
+              label="Operação"
+              items={OPS_NAV}
               collapsed={collapsed}
-              active={pathname.startsWith(n.href)}
+              pathname={pathname}
             />
-          ))}
-          {isSupervisor && (
-            <div className="mt-5 pt-4 border-t border-white/[0.08]">
-              {!collapsed && (
-                <p className="px-3 mb-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-white/30">
-                  Operação
-                </p>
-              )}
-              {OPS_NAV.map((n) => (
-                <SidebarLink
-                  key={n.href}
-                  {...n}
-                  collapsed={collapsed}
-                  active={pathname.startsWith(n.href)}
-                />
-              ))}
-            </div>
           )}
-          {isSupervisor && (
-            <div className="mt-5 pt-4 border-t border-white/[0.08]">
-              {!collapsed && (
-                <p className="px-3 mb-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-white/30">
-                  Admin
-                </p>
-              )}
-              {(isAdmin ? ADMIN_NAV : []).map((n) => (
-                <SidebarLink
-                  key={n.href}
-                  {...n}
-                  collapsed={collapsed}
-                  active={pathname.startsWith(n.href)}
-                />
-              ))}
-              <SidebarLink
-                href="/app/metrics"
-                label="Métricas"
-                Icon={IconMetrics}
-                collapsed={collapsed}
-                active={pathname.startsWith("/app/metrics")}
-              />
-            </div>
+          {isAdmin && (
+            <NavSection
+              label="Configuração"
+              items={CONFIG_NAV}
+              collapsed={collapsed}
+              pathname={pathname}
+            />
           )}
         </nav>
 
@@ -279,6 +254,38 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
       <CommandPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
       {onboardingOpen && <Onboarding onClose={() => setOnboardingOpen(false)} />}
+    </div>
+  );
+}
+
+function NavSection({
+  label,
+  items,
+  collapsed,
+  pathname,
+  first
+}: {
+  label: string;
+  items: NavItemDef[];
+  collapsed: boolean;
+  pathname: string;
+  first?: boolean;
+}) {
+  return (
+    <div className={first ? "" : "mt-5 pt-4 border-t border-white/[0.08]"}>
+      {!collapsed && (
+        <p className="px-3 mb-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-white/30">
+          {label}
+        </p>
+      )}
+      {items.map((n) => (
+        <SidebarLink
+          key={n.href}
+          {...n}
+          collapsed={collapsed}
+          active={pathname.startsWith(n.href)}
+        />
+      ))}
     </div>
   );
 }
