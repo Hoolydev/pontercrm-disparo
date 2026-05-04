@@ -249,7 +249,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           </div>
         </div>
 
-        <div className="flex-1 overflow-hidden">{children}</div>
+        <div className="flex-1 overflow-y-auto">{children}</div>
       </div>
 
       <CommandPalette open={searchOpen} onClose={() => setSearchOpen(false)} />
