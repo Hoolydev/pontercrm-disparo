@@ -17,6 +17,7 @@
 | 2026-05-03 | anti-padrao-1-service-layer | ✓ | Anti-padrão 1: changeLeadStage (refresca stage_entered_at) + transitionConversationStatus (matriz ai_active↔handed_off→closed) em packages/agent-engine/src/lib; 5 callers migrados (PATCH /leads/stage, POST /leads override, update_stage tool, transfer_to_broker tool, takeover/release) |
 | 2026-05-03 | anti-padrao-3-domain-events | ✓ | Anti-padrão 3: tabela `domain_events` (audit log durável) + `recordEvent()` chamado em changeLeadStage / transitionConversationStatus / recordBrokerAssignment. Migration 0010 NÃO aplicada no Neon — pendência do usuário. |
 | 2026-05-03 | anti-padrao-5-menu-reorg | ✓ | Anti-padrão 5: sidebar reagrupado em 3 sections (CRM / Operação / Configuração) com role gates; Métricas migra Admin→Operação; label /app/leads vira "Leads". Top bar Métricas preservada. |
+| 2026-05-04 | campaign-blast-attachments-fix | ✓ | Bug: blast outbound fast path em run.ts não enviava `campaign_attachments` (vídeo da campanha nunca chegava). Fix: depois do texto, enfileira N rows de mídia (uma por anexo), com delay textDelay + (i+1)*3000ms. |
 
 ## Plano de refactor (5 anti-padrões — ordem de execução)
 
