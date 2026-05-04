@@ -1,12 +1,12 @@
 import { createBrokerFollowups, recordBrokerAssignment } from "@pointer/agent-engine";
 import { schema } from "@pointer/db";
-import { newId, normalizeE164 } from "@pointer/shared";
+import { getQueues } from "@pointer/queue";
+import { normalizeE164 } from "@pointer/shared";
 import { and, desc, eq, ilike, inArray, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db.js";
-import { pickBroker } from "../lib/round-robin.js";
-import { resolveDefaultStageId } from "../lib/pipeline.js";
+import { ingestLead } from "../lib/lead-ingest.js";
 
 export async function registerLeads(app: FastifyInstance) {
   const auth = { preHandler: [app.authenticate] };
@@ -118,25 +118,39 @@ export async function registerLeads(app: FastifyInstance) {
     if (!body.success) return reply.badRequest();
 
     const db = getDb();
-    const phone = normalizeE164(body.data.phone);
-    const brokerId = body.data.brokerId ?? (await pickBroker(db)) ?? undefined;
-    const stageId = body.data.pipelineStageId ?? (await resolveDefaultStageId(db));
 
-    const id = newId();
-    await db.insert(schema.leads).values({
-      id,
-      sourceId: body.data.sourceId,
-      name: body.data.name,
-      phone,
-      email: body.data.email,
-      origin: body.data.origin,
-      propertyRef: body.data.propertyRef,
-      assignedBrokerId: brokerId,
-      pipelineStageId: stageId,
-      metadataJson: { manual: true }
-    });
+    // Delegate to the same path the webhook uses: creates lead + conversation
+    // and enqueues first-touch ai-reply. Keeps manual-created leads in sync
+    // with the rest of the ingest pipeline (otherwise the lead enters mute).
+    const { leadId, conversationId, isNew } = await ingestLead(
+      db,
+      getQueues(),
+      body.data.sourceId,
+      {
+        phone: normalizeE164(body.data.phone),
+        name: body.data.name,
+        email: body.data.email,
+        origin: body.data.origin,
+        propertyRef: body.data.propertyRef
+      }
+    );
 
-    return reply.code(201).send({ id });
+    // Honor explicit overrides from the manual endpoint (admin picked broker /
+    // stage in the UI — must override round-robin / default stage).
+    const overrides: Record<string, unknown> = {};
+    if (body.data.brokerId) overrides.assignedBrokerId = body.data.brokerId;
+    if (body.data.pipelineStageId) overrides.pipelineStageId = body.data.pipelineStageId;
+    if (Object.keys(overrides).length > 0) {
+      await db.update(schema.leads).set(overrides).where(eq(schema.leads.id, leadId));
+    }
+
+    // Mark this lead as manually-created so reports can distinguish from webhook ingest.
+    await db
+      .update(schema.leads)
+      .set({ metadataJson: { manual: true } })
+      .where(eq(schema.leads.id, leadId));
+
+    return reply.code(201).send({ id: leadId, conversationId, isNew });
   });
 
   // PATCH /leads/:id/stage

@@ -1,10 +1,35 @@
 import { schema } from "@pointer/db";
 import type { AppointmentStatus } from "@pointer/shared";
 import { newId } from "@pointer/shared";
-import { and, asc, eq, gte, lte } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lte, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db.js";
+
+const APPT_CONFLICT_WINDOW_MIN = 30;
+const ACTIVE_APPT_STATUSES: AppointmentStatus[] = ["scheduled", "confirmed"];
+
+async function findConflictingAppointment(
+  db: ReturnType<typeof getDb>,
+  brokerId: string,
+  scheduledFor: Date,
+  ignoreId: string | null
+) {
+  const winMs = APPT_CONFLICT_WINDOW_MIN * 60 * 1000;
+  const from = new Date(scheduledFor.getTime() - winMs);
+  const to = new Date(scheduledFor.getTime() + winMs);
+  const where = [
+    eq(schema.appointments.brokerId, brokerId),
+    inArray(schema.appointments.status, ACTIVE_APPT_STATUSES),
+    gte(schema.appointments.scheduledFor, from),
+    lte(schema.appointments.scheduledFor, to)
+  ];
+  if (ignoreId) where.push(ne(schema.appointments.id, ignoreId));
+  return db.query.appointments.findFirst({
+    where: and(...where),
+    columns: { id: true, scheduledFor: true, status: true }
+  });
+}
 
 const APPOINTMENT_STATUSES = [
   "scheduled",
@@ -126,13 +151,25 @@ export async function registerAppointments(app: FastifyInstance) {
       ? body.data.brokerId
       : (ownBroker ?? conv.assignedBrokerId ?? null);
 
+    const scheduledFor = new Date(body.data.scheduledFor);
+
+    if (targetBroker) {
+      const clash = await findConflictingAppointment(db, targetBroker, scheduledFor, null);
+      if (clash) {
+        return reply.code(409).send({
+          message: "Broker já tem compromisso na janela de ±30min",
+          conflictWith: clash
+        });
+      }
+    }
+
     const id = newId();
     await db.insert(schema.appointments).values({
       id,
       conversationId: body.data.conversationId,
       leadId: body.data.leadId,
       brokerId: targetBroker ?? undefined,
-      scheduledFor: new Date(body.data.scheduledFor),
+      scheduledFor,
       address: body.data.address,
       notes: body.data.notes,
       status: "scheduled",
@@ -148,7 +185,7 @@ export async function registerAppointments(app: FastifyInstance) {
 
     const existing = await db.query.appointments.findFirst({
       where: eq(schema.appointments.id, req.params.id),
-      columns: { id: true, brokerId: true }
+      columns: { id: true, brokerId: true, scheduledFor: true, status: true }
     });
     if (!existing) return reply.notFound();
 
@@ -157,6 +194,37 @@ export async function registerAppointments(app: FastifyInstance) {
 
     const update: Record<string, unknown> = { ...body.data };
     if (body.data.scheduledFor) update.scheduledFor = new Date(body.data.scheduledFor);
+
+    // Re-check conflict if reschedule, broker change, or reactivation lands
+    // the appointment in an active status with a broker.
+    const nextBrokerId =
+      body.data.brokerId !== undefined ? body.data.brokerId : existing.brokerId;
+    const nextScheduledFor = body.data.scheduledFor
+      ? new Date(body.data.scheduledFor)
+      : existing.scheduledFor;
+    const nextStatus = body.data.status ?? existing.status;
+    const willBeActive = ACTIVE_APPT_STATUSES.includes(nextStatus);
+
+    if (
+      willBeActive &&
+      nextBrokerId &&
+      (body.data.scheduledFor !== undefined ||
+        body.data.brokerId !== undefined ||
+        body.data.status !== undefined)
+    ) {
+      const clash = await findConflictingAppointment(
+        db,
+        nextBrokerId,
+        nextScheduledFor,
+        existing.id
+      );
+      if (clash) {
+        return reply.code(409).send({
+          message: "Broker já tem compromisso na janela de ±30min",
+          conflictWith: clash
+        });
+      }
+    }
 
     await db.update(schema.appointments).set(update).where(eq(schema.appointments.id, req.params.id));
     return { ok: true };
