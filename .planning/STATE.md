@@ -15,12 +15,13 @@
 |------|------|--------|--------|
 | 2026-05-03 | backend-invariants | ✓ | Anti-padrão 4: POST /leads delega pra ingestLead (lead manual recebe IA) + POST/PATCH /appointments rejeita conflito ±30min |
 | 2026-05-03 | anti-padrao-1-service-layer | ✓ | Anti-padrão 1: changeLeadStage (refresca stage_entered_at) + transitionConversationStatus (matriz ai_active↔handed_off→closed) em packages/agent-engine/src/lib; 5 callers migrados (PATCH /leads/stage, POST /leads override, update_stage tool, transfer_to_broker tool, takeover/release) |
+| 2026-05-03 | anti-padrao-3-domain-events | ✓ | Anti-padrão 3: tabela `domain_events` (audit log durável) + `recordEvent()` chamado em changeLeadStage / transitionConversationStatus / recordBrokerAssignment. Migration 0010 NÃO aplicada no Neon — pendência do usuário. |
 
 ## Plano de refactor (5 anti-padrões — ordem de execução)
 
 1. ✅ **Anti-padrão 4** — invariantes no backend
 2. ✅ **Anti-padrão 1** — service layer (`changeLeadStage`, `transitionConversationStatus`). `brokerQueueService` descartado (sem callers admin de mutação)
-3. ⏳ **Anti-padrão 3** — `domain_events` table + `recordEvent()` chamado dentro dos services
+3. ✅ **Anti-padrão 3** — `domain_events` audit log + `recordEvent()` em changeLeadStage / transitionConversationStatus / recordBrokerAssignment. Migration 0010 pendente de apply no Neon.
 4. ⏳ **Anti-padrão 5** — reorganização do menu por entidade (CRM / Catálogo / Operação / Configuração)
 5. ⏳ **Anti-padrão 2** — de-duplicação de UI (Kanban/Lista filtros, Inbox/LeadDetail conversas) — sob demanda
 
@@ -34,4 +35,5 @@
 ## Como retomar
 
 - `/gsd-progress` para ver onde paramos.
-- Próxima ação recomendada: anti-padrão 3 (`domain_events` table + `recordEvent()` dentro dos services). `/gsd-plan-phase` faz mais sentido aqui — schema novo + integração transacional pede discussão prévia.
+- **Pendência crítica**: aplicar migration 0010 no Neon antes de subir o backend (`pnpm --filter @pointer/db migrate` ou rodar SQL direto). Sem isso, qualquer mutação via service nos 3 sites integrados vai falhar com "relation domain_events does not exist".
+- Próxima ação recomendada: anti-padrão 5 (menu reorg) ou 2 (UI dedup) — ambos só UI. Anti-padrão 5 é o que dá ganho operacional maior (menu por entidade).
