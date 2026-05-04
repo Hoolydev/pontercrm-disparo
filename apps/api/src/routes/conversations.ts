@@ -243,7 +243,7 @@ export async function registerConversations(app: FastifyInstance) {
       await queues.outboundMessage.add(
         `retry:${msgId}`,
         { messageId: msgId, conversationId: convId },
-        { delay: scheduled * delaySeconds * 1000, jobId: `retry:${msgId}` }
+        { delay: scheduled * delaySeconds * 1000, jobId: `retry-${msgId}` }
       );
 
       scheduled++;

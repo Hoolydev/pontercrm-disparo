@@ -101,7 +101,7 @@ async function transitionStatus(
       .outboundBlastSeeder.add(
         `seed:${id}`,
         { campaignId: id },
-        { jobId: `seed:${id}:${minuteBucket}` }
+        { jobId: `seed-${id}-${minuteBucket}` }
       )
       .catch((err) => {
         app.log.warn({ err, campaignId: id }, "campaign: seeder enqueue skipped (already exists)");

@@ -131,7 +131,7 @@ export async function registerWebhooks(app: FastifyInstance) {
         mediaUrl: message.mediaUrl,
         providerMessageId: message.providerMessageId,
         receivedAt: message.timestamp.toISOString()
-      }, { jobId: `msg-${dedupeKey}` });
+      }, { jobId: `msg-${dedupeKey}`.replaceAll(":", "-") });
 
       return reply.code(200).send({ ok: true });
     }

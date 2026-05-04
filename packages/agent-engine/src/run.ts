@@ -448,7 +448,7 @@ export async function runAgent(
         .add(
           "summarize",
           { conversationId },
-          { jobId: `summarize:${conversationId}` }
+          { jobId: `summarize-${conversationId}` }
         )
         .catch((err) =>
           logger.error(
