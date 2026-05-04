@@ -3,8 +3,9 @@ import type { Database } from "@pointer/db";
 import { getLLMForModel } from "@pointer/llm";
 import type { ChatMessage, ToolDef } from "@pointer/llm";
 import { getQueues, withLock } from "@pointer/queue";
+import type { MediaType } from "@pointer/shared";
 import { newId, sha256 } from "@pointer/shared";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import type { Redis } from "ioredis";
 import { loadContext } from "./context.js";
 import { builtInTools, resolveToolName } from "./tools/index.js";
@@ -225,6 +226,10 @@ export async function runAgent(
     });
 
     let aiMsgIdTpl: string | null = null;
+    const textDelay = pickDelay({
+      campaignDelayRange: campaignDelay,
+      agentDelayRange: behavior.delay_range_ms
+    });
     await withLock(`conv:${conversationId}`, LOCK_TTL_MS, async () => {
       const contentHash = sha256(`tpl:${conversationId}:${text}`);
       aiMsgIdTpl = newId();
@@ -243,11 +248,10 @@ export async function runAgent(
         .where(eq(schema.conversations.id, conversationId));
 
       const queues = getQueues();
-      const delay = pickDelay({ campaignDelayRange: campaignDelay, agentDelayRange: behavior.delay_range_ms });
       await queues.outboundMessage.add(
         `tpl-${aiMsgIdTpl}`,
         { messageId: aiMsgIdTpl, conversationId },
-        { delay }
+        { delay: textDelay }
       );
       await publisher.publish(
         CH_INBOX,
@@ -261,8 +265,51 @@ export async function runAgent(
       );
     });
 
+    let attachmentsSent = 0;
+    if (conv.campaignId) {
+      const atts = await db.query.campaignAttachments.findMany({
+        where: eq(schema.campaignAttachments.campaignId, conv.campaignId),
+        orderBy: [asc(schema.campaignAttachments.createdAt)]
+      });
+
+      const queues = getQueues();
+      let i = 0;
+      for (const att of atts) {
+        const mediaMsgId = newId();
+        const contentHash = sha256(`camp-att:${conversationId}:${att.id}`);
+        await db.insert(schema.messages).values({
+          id: mediaMsgId,
+          conversationId,
+          direction: "out",
+          senderType: "ai",
+          content: att.caption ?? "",
+          contentHash,
+          mediaUrl: att.url,
+          mediaType: att.kind as MediaType,
+          status: "queued"
+        });
+        await queues.outboundMessage.add(
+          `camp-att-${mediaMsgId}`,
+          { messageId: mediaMsgId, conversationId },
+          { delay: textDelay + (i + 1) * 3000, jobId: `camp-att-${mediaMsgId}` }
+        );
+        await publisher.publish(
+          CH_INBOX,
+          JSON.stringify({
+            kind: "message:new",
+            conversationId,
+            messageId: mediaMsgId,
+            senderType: "ai",
+            brokerId: conv.assignedBrokerId
+          })
+        );
+        attachmentsSent++;
+        i++;
+      }
+    }
+
     logger.info(
-      { conversationId, mode, templated: true },
+      { conversationId, mode, templated: true, attachmentsSent },
       "engine: first-message template dispatched (skipped LLM)"
     );
 
