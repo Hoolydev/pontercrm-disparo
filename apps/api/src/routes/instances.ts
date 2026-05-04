@@ -20,14 +20,25 @@ export async function registerInstances(app: FastifyInstance) {
   app.get("/whatsapp-instances", authGuard, async () => {
     const db = getDb();
     const rows = await db.query.whatsappInstances.findMany();
-    // Decrypt + mask tokens in configJson before sending
+    // Decrypt + mask tokens per row. If a single row has malformed/legacy
+    // ciphertext, surface a placeholder for THAT row instead of 500ing the
+    // whole list (key rotation, hand-edited configJson, etc).
     return {
-      instances: rows.map((r) => ({
-        ...r,
-        configJson: maskSecrets(
-          decryptJson(r.configJson as Record<string, unknown>, config.ENCRYPTION_KEY)
-        )
-      }))
+      instances: rows.map((r) => {
+        let configJson: Record<string, unknown>;
+        try {
+          configJson = maskSecrets(
+            decryptJson(r.configJson as Record<string, unknown>, config.ENCRYPTION_KEY)
+          );
+        } catch (err) {
+          app.log.warn(
+            { instanceId: r.id, err },
+            "decrypt failed for instance configJson — surfacing placeholder"
+          );
+          configJson = { __error: "decryption_failed" };
+        }
+        return { ...r, configJson };
+      })
     };
   });
 

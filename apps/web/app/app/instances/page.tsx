@@ -101,7 +101,7 @@ const PROVIDER_FIELD_SPECS: Record<
 
 export default function InstancesPage() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["instances"],
     queryFn: () => api.get<{ instances: Instance[] }>("/whatsapp-instances")
   });
@@ -337,6 +337,21 @@ export default function InstancesPage() {
 
       {isLoading ? (
         <p className="text-sm text-neutral-400">Carregando…</p>
+      ) : isError ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+          <p className="text-sm font-medium text-red-700">
+            Falha ao carregar instâncias
+          </p>
+          <p className="mt-1 text-xs text-red-600">
+            {error instanceof Error ? error.message : "erro desconhecido"}
+          </p>
+          <button
+            onClick={() => refetch()}
+            className="mt-3 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
+          >
+            Tentar novamente
+          </button>
+        </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
           {data?.instances.map((inst) => (
