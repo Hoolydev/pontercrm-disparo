@@ -1,6 +1,7 @@
 import { schema } from "@pointer/db";
 import { and, eq, ilike } from "drizzle-orm";
 import { cancelPendingFollowupsForLead } from "../lib/followups.js";
+import { changeLeadStage } from "../lib/leads.js";
 import type { ToolEntry } from "../types.js";
 
 const CH_INBOX = "inbox:updates";
@@ -83,7 +84,8 @@ export const updateStage: ToolEntry = {
       };
     }
 
-    if (stage.id === conv.lead.pipelineStageId) {
+    const { changed, previousStageId } = await changeLeadStage(db, conv.leadId, stage.id);
+    if (!changed) {
       logger.info(
         { conversationId, leadId: conv.leadId, stageId: stage.id },
         "tool: update_stage no-op (already at stage)"
@@ -93,11 +95,6 @@ export const updateStage: ToolEntry = {
         result: { stageId: stage.id, stageName: stage.name, category: stage.category, unchanged: true }
       };
     }
-
-    await db
-      .update(schema.leads)
-      .set({ pipelineStageId: stage.id })
-      .where(eq(schema.leads.id, conv.leadId));
 
     // If we just landed in a final category, kill any pending cobrança chain.
     if (stage.category === "won" || stage.category === "lost") {
@@ -117,7 +114,7 @@ export const updateStage: ToolEntry = {
         stageId: stage.id,
         stageName: stage.name,
         stageCategory: stage.category,
-        previousStageId: conv.lead.pipelineStageId
+        previousStageId
       })
     );
 
@@ -138,7 +135,7 @@ export const updateStage: ToolEntry = {
         stageId: stage.id,
         stageName: stage.name,
         category: stage.category,
-        previousStageId: conv.lead.pipelineStageId
+        previousStageId
       }
     };
   }

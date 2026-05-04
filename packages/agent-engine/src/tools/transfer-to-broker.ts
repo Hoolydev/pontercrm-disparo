@@ -1,6 +1,7 @@
 import { schema } from "@pointer/db";
 import { getQueues } from "@pointer/queue";
 import { eq } from "drizzle-orm";
+import { transitionConversationStatus } from "../lib/conversations.js";
 import { createBrokerFollowups } from "../lib/followups.js";
 import { pickBrokerForLead, recordBrokerAssignment } from "../lib/distribution.js";
 import type { ToolEntry } from "../types.js";
@@ -64,15 +65,10 @@ export const transferToBroker: ToolEntry = {
       targetBroker = await pickBrokerForLead(db);
     }
 
-    await db
-      .update(schema.conversations)
-      .set({
-        aiPaused: true,
-        status: "handed_off",
-        assignedBrokerId: targetBroker ?? undefined,
-        handoffReason: reason
-      })
-      .where(eq(schema.conversations.id, conversationId));
+    await transitionConversationStatus(db, conversationId, "handed_off", {
+      handoffReason: reason,
+      assignBrokerId: targetBroker ?? null
+    });
 
     if (targetBroker) {
       await db

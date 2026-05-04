@@ -1,4 +1,8 @@
-import { cancelPendingFollowups, markBrokerAccepted } from "@pointer/agent-engine";
+import {
+  cancelPendingFollowups,
+  markBrokerAccepted,
+  transitionConversationStatus
+} from "@pointer/agent-engine";
 import { schema } from "@pointer/db";
 import { getQueues } from "@pointer/queue";
 import { newId, sha256 } from "@pointer/shared";
@@ -275,14 +279,9 @@ export async function registerConversations(app: FastifyInstance) {
         assignBrokerId = broker.id;
       }
 
-      await db
-        .update(schema.conversations)
-        .set({
-          aiPaused: true,
-          status: "handed_off",
-          assignedBrokerId: assignBrokerId ?? undefined
-        })
-        .where(eq(schema.conversations.id, conv.id));
+      await transitionConversationStatus(db, conv.id, "handed_off", {
+        assignBrokerId: assignBrokerId ?? null
+      });
 
       return { ok: true };
     }
@@ -349,10 +348,7 @@ export async function registerConversations(app: FastifyInstance) {
       });
       if (!conv) return reply.notFound();
 
-      await db
-        .update(schema.conversations)
-        .set({ aiPaused: false, status: "ai_active", handoffReason: null })
-        .where(eq(schema.conversations.id, conv.id));
+      await transitionConversationStatus(db, conv.id, "ai_active", { aiPaused: false });
 
       return { ok: true };
     }

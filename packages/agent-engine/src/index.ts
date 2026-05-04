@@ -44,4 +44,6 @@ export {
   progressiveDecayDelta,
   SCORE_DELTAS
 } from "./lib/scoring.js";
+export { changeLeadStage } from "./lib/leads.js";
+export { transitionConversationStatus } from "./lib/conversations.js";
 export * from "./types.js";

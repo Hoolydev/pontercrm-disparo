@@ -1,4 +1,9 @@
-import { createBrokerFollowups, recordBrokerAssignment } from "@pointer/agent-engine";
+import {
+  changeLeadStage,
+  createBrokerFollowups,
+  recordBrokerAssignment,
+  transitionConversationStatus
+} from "@pointer/agent-engine";
 import { schema } from "@pointer/db";
 import { getQueues } from "@pointer/queue";
 import { normalizeE164 } from "@pointer/shared";
@@ -137,11 +142,14 @@ export async function registerLeads(app: FastifyInstance) {
 
     // Honor explicit overrides from the manual endpoint (admin picked broker /
     // stage in the UI — must override round-robin / default stage).
-    const overrides: Record<string, unknown> = {};
-    if (body.data.brokerId) overrides.assignedBrokerId = body.data.brokerId;
-    if (body.data.pipelineStageId) overrides.pipelineStageId = body.data.pipelineStageId;
-    if (Object.keys(overrides).length > 0) {
-      await db.update(schema.leads).set(overrides).where(eq(schema.leads.id, leadId));
+    if (body.data.brokerId) {
+      await db
+        .update(schema.leads)
+        .set({ assignedBrokerId: body.data.brokerId })
+        .where(eq(schema.leads.id, leadId));
+    }
+    if (body.data.pipelineStageId) {
+      await changeLeadStage(db, leadId, body.data.pipelineStageId);
     }
 
     // Mark this lead as manually-created so reports can distinguish from webhook ingest.
@@ -164,10 +172,7 @@ export async function registerLeads(app: FastifyInstance) {
     });
     if (!stage) return reply.badRequest("invalid stageId");
 
-    await db
-      .update(schema.leads)
-      .set({ pipelineStageId: body.data.stageId })
-      .where(eq(schema.leads.id, req.params.id));
+    await changeLeadStage(db, req.params.id, body.data.stageId);
     return { ok: true };
   });
 
