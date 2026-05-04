@@ -24,7 +24,7 @@
 2. ✅ **Anti-padrão 1** — service layer (`changeLeadStage`, `transitionConversationStatus`). `brokerQueueService` descartado (sem callers admin de mutação)
 3. ✅ **Anti-padrão 3** — `domain_events` audit log + `recordEvent()` em changeLeadStage / transitionConversationStatus / recordBrokerAssignment. Migration 0010 pendente de apply no Neon.
 4. ✅ **Anti-padrão 5** — sidebar reagrupado em 3 sections (CRM / Operação / Configuração). Catálogo absorvido em CRM (1-2 itens não justificavam section própria).
-5. ⏳ **Anti-padrão 2** — de-duplicação de UI (Kanban/Lista filtros, Inbox/LeadDetail conversas) — sob demanda
+5. ⏭️ **Anti-padrão 2** — descartado conscientemente em 2026-05-03. Auditoria mostrou ~140 linhas de duplicação real (types Lead/Stage inline em list/kanban, fetch + stage select duplicados entre LeadDetailDrawer e /app/leads/[id]/page). Sem sintoma reportado e o usuário precisa preservar o comportamento atual das views de leads (controle granular de outbound enviado vs falho). Reabrir só se aparecer divergência funcional (ex: filtro mudou em uma view e não na outra, ou drawer/page mostram campos diferentes).
 
 ## Mudanças paralelas recentes (não-GSD)
 
@@ -36,5 +36,6 @@
 ## Como retomar
 
 - `/gsd-progress` para ver onde paramos.
-- **Pendência crítica**: aplicar migration 0010 no Neon antes de subir o backend (`pnpm --filter @pointer/db migrate` ou rodar SQL direto). Sem isso, qualquer mutação via service nos 3 sites integrados vai falhar com "relation domain_events does not exist".
-- Próxima ação recomendada: anti-padrão 2 (UI dedup) é "sob demanda" — vale só se algum bug/divergência aparecer entre Kanban/Lista de leads ou Inbox/LeadDetail. Pode pular e considerar o refactor concluído.
+- **Refactor de anti-padrões encerrado** em 4/5 (anti-padrão 2 descartado conscientemente — ver nota acima). Não há próxima fase pendente do plano.
+- **Pendência crítica para deploy**: aplicar migration 0010 no Neon antes de subir o backend (`pnpm --filter @pointer/db migrate` ou rodar SQL direto). Sem isso, qualquer mutação via service nos 3 sites integrados vai falhar com "relation domain_events does not exist".
+- **Verificação UI pendente**: rodar dev server e validar visualmente o sidebar reagrupado (anti-padrão 5) como admin/supervisor/broker.
