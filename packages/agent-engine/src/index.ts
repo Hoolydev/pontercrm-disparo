@@ -46,4 +46,6 @@ export {
 } from "./lib/scoring.js";
 export { changeLeadStage } from "./lib/leads.js";
 export { transitionConversationStatus } from "./lib/conversations.js";
+export { recordEvent } from "./lib/domain-events.js";
+export type { RecordEventOpts } from "./lib/domain-events.js";
 export * from "./types.js";

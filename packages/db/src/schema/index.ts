@@ -26,4 +26,5 @@ export * from "./notifications.js";
 export * from "./properties.js";
 export * from "./agent-attachments.js";
 export * from "./campaign-attachments.js";
+export * from "./domain-events.js";
 export * from "./relations.js";

@@ -93,6 +93,16 @@ export type LeadClassification = (typeof LEAD_CLASSIFICATION)[number];
 
 export const LEAD_SCORE_THRESHOLDS = { warm: 10, hot: 30 } as const;
 
+export const DOMAIN_AGGREGATE_TYPE = ["lead", "conversation", "broker_queue"] as const;
+export type DomainAggregateType = (typeof DOMAIN_AGGREGATE_TYPE)[number];
+
+export const DOMAIN_EVENT_TYPE = [
+  "lead.stage_changed",
+  "conversation.status_changed",
+  "broker.assigned"
+] as const;
+export type DomainEventType = (typeof DOMAIN_EVENT_TYPE)[number];
+
 export function classifyScore(score: number): LeadClassification {
   if (score >= LEAD_SCORE_THRESHOLDS.hot) return "hot";
   if (score >= LEAD_SCORE_THRESHOLDS.warm) return "warm";

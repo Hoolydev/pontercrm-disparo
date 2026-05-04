@@ -2,6 +2,7 @@ import { schema } from "@pointer/db";
 import type { Database } from "@pointer/db";
 import { newId } from "@pointer/shared";
 import { and, eq, sql } from "drizzle-orm";
+import { recordEvent } from "./domain-events.js";
 
 export type PriorityHint = "low" | "normal" | "high";
 
@@ -145,6 +146,7 @@ export async function recordBrokerAssignment(
   const id = newId();
   const ms = opts.timeoutMs ?? timeoutMsForPriority(opts.priorityHint);
   const now = new Date();
+  const timeoutAt = new Date(now.getTime() + ms);
   await db.insert(schema.brokerQueue).values({
     id,
     leadId: opts.leadId,
@@ -152,11 +154,23 @@ export async function recordBrokerAssignment(
     conversationId: opts.conversationId ?? undefined,
     priorityHint: opts.priorityHint ?? undefined,
     assignedAt: now,
-    timeoutAt: new Date(now.getTime() + ms),
+    timeoutAt,
     attempts: opts.attempts ?? 1,
     reason: opts.reason ?? undefined,
     status: "pending"
   });
+
+  await recordEvent(db, "broker_queue", id, "broker.assigned", {
+    payload: {
+      leadId: opts.leadId,
+      brokerId: opts.brokerId,
+      conversationId: opts.conversationId ?? null,
+      priorityHint: opts.priorityHint ?? null,
+      timeoutAt: timeoutAt.toISOString(),
+      reason: opts.reason ?? null
+    }
+  });
+
   return { id, reused: false };
 }
 

@@ -2,6 +2,7 @@ import { schema } from "@pointer/db";
 import type { Database } from "@pointer/db";
 import type { ConversationStatus } from "@pointer/shared";
 import { eq } from "drizzle-orm";
+import { recordEvent } from "./domain-events.js";
 
 const VALID_TRANSITIONS: Record<ConversationStatus, readonly ConversationStatus[]> = {
   ai_active: ["handed_off", "closed"],
@@ -17,6 +18,7 @@ export async function transitionConversationStatus(
     handoffReason?: string | null;
     assignBrokerId?: string | null;
     aiPaused?: boolean;
+    actor?: string | null;
   } = {}
 ): Promise<{ changed: boolean }> {
   const conv = await db.query.conversations.findFirst({
@@ -59,6 +61,16 @@ export async function transitionConversationStatus(
     .update(schema.conversations)
     .set(patch)
     .where(eq(schema.conversations.id, conversationId));
+
+  await recordEvent(db, "conversation", conversationId, "conversation.status_changed", {
+    actor: opts.actor ?? null,
+    payload: {
+      from: conv.status,
+      to: newStatus,
+      handoffReason: patch.handoffReason ?? null,
+      assignedBrokerId: patch.assignedBrokerId ?? null
+    }
+  });
 
   return { changed: true };
 }

@@ -71,6 +71,13 @@
       "when": 1777225000000,
       "tag": "0009_agent_outbound_handoff",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1778120000000,
+      "tag": "0010_domain_events",
+      "breakpoints": true
     }
   ]
 }
