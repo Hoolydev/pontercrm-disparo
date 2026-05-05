@@ -23,6 +23,7 @@
 | 2026-05-05 | cleanup-duplicate-queued-messages | ✓ | Script ops `apps/api/src/cleanup_duplicate_queued.ts` para limpar duplicatas geradas pelos cliques múltiplos no retry-failed antes do fix de batch. Dry-run default; --execute deleta. Best-effort remove BullMQ jobs também. |
 | 2026-05-05 | hide-queued-messages-inbox | ✓ | UX: msgs outbound em status='queued' não devem aparecer no chat até o worker resolver. Filtro `NOT (direction='out' AND status='queued')` em GET /conversations e GET /conversations/:id. |
 | 2026-05-05 | outbound-worker-mark-failed-on-throw | ✓ | Bug: msgs ficavam `queued` para sempre quando worker batia em campaign_rate_limit / no_instance_available. Fix: marcar `status='failed'` antes dos 2 throws + safety-net failed listener no worker do outboundMessage. Retry path preservado. |
+| 2026-05-05 | failed-filter-leaves-on-success | ✓ | UX: conv saía do filtro "Falhadas" após retry bem-sucedido. Predicate trocado de `EXISTS (status='failed')` para "última msg outbound não-queued é failed". Mesma mudança em failedCount. |
 
 ## Plano de refactor (5 anti-padrões — ordem de execução)
 
