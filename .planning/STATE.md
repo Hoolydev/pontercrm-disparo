@@ -24,6 +24,7 @@
 | 2026-05-05 | hide-queued-messages-inbox | ✓ | UX: msgs outbound em status='queued' não devem aparecer no chat até o worker resolver. Filtro `NOT (direction='out' AND status='queued')` em GET /conversations e GET /conversations/:id. |
 | 2026-05-05 | outbound-worker-mark-failed-on-throw | ✓ | Bug: msgs ficavam `queued` para sempre quando worker batia em campaign_rate_limit / no_instance_available. Fix: marcar `status='failed'` antes dos 2 throws + safety-net failed listener no worker do outboundMessage. Retry path preservado. |
 | 2026-05-05 | failed-filter-leaves-on-success | ✓ | UX: conv saía do filtro "Falhadas" após retry bem-sucedido. Predicate trocado de `EXISTS (status='failed')` para "última msg outbound não-queued é failed". Mesma mudança em failedCount. |
+| 2026-05-05 | retry-template-edit-and-handoff-agent | ✓ | Feature: dialog de reenvio agora abre template da campanha (editável com checkbox, suporta vars `{{name}}` etc + aliases PT-BR) e dropdown de agente inbound pra continuidade. Backend ganhou endpoint `/preview` + 2 campos opcionais em `/retry-failed`. Default igual ao antes. |
 
 ## Plano de refactor (5 anti-padrões — ordem de execução)
 
