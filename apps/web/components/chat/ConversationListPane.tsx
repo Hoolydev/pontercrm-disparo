@@ -7,7 +7,7 @@ import { getToken } from "../../lib/session";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3333";
 
-type Filter = "all" | "failed";
+type Filter = "all" | "failed" | "sent";
 
 type WhatsappInstance = {
   id: string;
@@ -37,14 +37,17 @@ export default function ConversationListPane({ activeId }: { activeId?: string }
       const url =
         filter === "failed"
           ? "/conversations?failed=true&limit=5000"
+          : filter === "sent"
+          ? "/conversations?sent=true&limit=5000"
           : "/conversations?limit=5000";
-      return api.get<{ conversations: ConversationSummary[]; failedCount: number }>(url);
+      return api.get<{ conversations: ConversationSummary[]; failedCount: number; sentCount: number }>(url);
     },
     refetchInterval: 30_000
   });
 
   const conversations = data?.conversations ?? [];
   const failedCount = data?.failedCount ?? 0;
+  const sentCount = data?.sentCount ?? 0;
 
   // SSE for live updates
   useEffect(() => {
@@ -94,6 +97,12 @@ export default function ConversationListPane({ activeId }: { activeId?: string }
       <div className="flex gap-1 border-b-2 border-neutral-200 bg-neutral-50 px-2 py-2">
         <FilterTab label="Todas" active={filter === "all"} onClick={() => { setFilter("all"); exitSelectionMode(); }} />
         <FilterTab
+          label={`Enviadas${sentCount > 0 ? ` (${sentCount})` : ""}`}
+          active={filter === "sent"}
+          onClick={() => { setFilter("sent"); exitSelectionMode(); }}
+          variant="sent"
+        />
+        <FilterTab
           label={`Falhas${failedCount > 0 ? ` (${failedCount})` : ""}`}
           active={filter === "failed"}
           onClick={() => { setFilter("failed"); exitSelectionMode(); }}
@@ -134,7 +143,11 @@ export default function ConversationListPane({ activeId }: { activeId?: string }
       <div className="min-h-0 flex-1 overflow-y-auto">
         {conversations.length === 0 && (
           <p className="px-4 py-8 text-center text-sm text-neutral-400">
-            {filter === "failed" ? "Nenhuma falha" : "Nenhuma conversa ainda"}
+            {filter === "failed"
+              ? "Nenhuma falha"
+              : filter === "sent"
+              ? "Nenhuma mensagem enviada"
+              : "Nenhuma conversa ainda"}
           </p>
         )}
         {conversations.map((c) => (
@@ -185,15 +198,19 @@ function FilterTab({
   label: string;
   active: boolean;
   onClick: () => void;
-  variant?: "failed";
+  variant?: "failed" | "sent";
 }) {
   const activeCls =
     variant === "failed"
       ? "bg-red-600 text-white shadow-sm"
+      : variant === "sent"
+      ? "bg-green-600 text-white shadow-sm"
       : "bg-blue-600 text-white shadow-sm";
   const inactiveCls =
     variant === "failed"
       ? "text-red-700 hover:bg-red-50 border border-red-200"
+      : variant === "sent"
+      ? "text-green-700 hover:bg-green-50 border border-green-200"
       : "text-neutral-600 hover:bg-white border border-neutral-200";
   return (
     <button

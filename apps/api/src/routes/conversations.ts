@@ -14,8 +14,8 @@ import { getDb } from "../db.js";
 export async function registerConversations(app: FastifyInstance) {
   const auth = { preHandler: [app.authenticate] };
 
-  // GET /conversations?limit=&failed=true
-  app.get<{ Querystring: { limit?: string; failed?: string } }>(
+  // GET /conversations?limit=&failed=true&sent=true
+  app.get<{ Querystring: { limit?: string; failed?: string; sent?: string } }>(
     "/conversations",
     auth,
     async (req) => {
@@ -33,12 +33,18 @@ export async function registerConversations(app: FastifyInstance) {
       const requested = req.query.limit ? parseInt(req.query.limit, 10) : 60;
       const limit = Math.min(Math.max(Number.isFinite(requested) ? requested : 60, 1), 5000);
       const onlyFailed = req.query.failed === "true";
+      const onlySent = req.query.sent === "true";
 
       const conditions = [];
       if (brokerId) conditions.push(eq(schema.conversations.assignedBrokerId, brokerId));
       if (onlyFailed) {
         conditions.push(
           sql`EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = ${schema.conversations.id} AND m.status = 'failed')`
+        );
+      }
+      if (onlySent) {
+        conditions.push(
+          sql`EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = ${schema.conversations.id} AND m.status IN ('sent', 'delivered', 'read'))`
         );
       }
 
@@ -53,6 +59,18 @@ export async function registerConversations(app: FastifyInstance) {
         }
       `);
       const failedCount = Number(failedCountRow.rows[0]?.n ?? 0);
+
+      const sentCountRow = await db.execute<{ n: string }>(sql`
+        SELECT COUNT(DISTINCT m.conversation_id) AS n
+        FROM messages m
+        WHERE m.status IN ('sent', 'delivered', 'read')
+        ${
+          brokerId
+            ? sql`AND EXISTS (SELECT 1 FROM conversations c WHERE c.id = m.conversation_id AND c.assigned_broker_id = ${brokerId})`
+            : sql``
+        }
+      `);
+      const sentCount = Number(sentCountRow.rows[0]?.n ?? 0);
 
       const rows = await db.query.conversations.findMany({
         where: conditions.length ? and(...conditions) : undefined,
@@ -77,7 +95,7 @@ export async function registerConversations(app: FastifyInstance) {
         }
       });
 
-      return { conversations: rows, failedCount };
+      return { conversations: rows, failedCount, sentCount };
     }
   );
 
