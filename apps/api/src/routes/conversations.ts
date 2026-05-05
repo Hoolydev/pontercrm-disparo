@@ -37,9 +37,19 @@ export async function registerConversations(app: FastifyInstance) {
 
       const conditions = [];
       if (brokerId) conditions.push(eq(schema.conversations.assignedBrokerId, brokerId));
+      // "Falhadas": last visible (non-queued) outbound message is failed.
+      // Once a successful retry lands (status sent/delivered/read), the
+      // conversation drops out of this filter.
       if (onlyFailed) {
         conditions.push(
-          sql`EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = ${schema.conversations.id} AND m.status = 'failed')`
+          sql`(
+            SELECT m.status FROM messages m
+            WHERE m.conversation_id = ${schema.conversations.id}
+              AND m.direction = 'out'
+              AND m.status <> 'queued'
+            ORDER BY m.created_at DESC
+            LIMIT 1
+          ) = 'failed'`
         );
       }
       if (onlySent) {
@@ -49,14 +59,17 @@ export async function registerConversations(app: FastifyInstance) {
       }
 
       const failedCountRow = await db.execute<{ n: string }>(sql`
-        SELECT COUNT(DISTINCT m.conversation_id) AS n
-        FROM messages m
-        WHERE m.status = 'failed'
-        ${
-          brokerId
-            ? sql`AND EXISTS (SELECT 1 FROM conversations c WHERE c.id = m.conversation_id AND c.assigned_broker_id = ${brokerId})`
-            : sql``
-        }
+        SELECT COUNT(*) AS n
+        FROM conversations c
+        WHERE (
+          SELECT m.status FROM messages m
+          WHERE m.conversation_id = c.id
+            AND m.direction = 'out'
+            AND m.status <> 'queued'
+          ORDER BY m.created_at DESC
+          LIMIT 1
+        ) = 'failed'
+        ${brokerId ? sql`AND c.assigned_broker_id = ${brokerId}` : sql``}
       `);
       const failedCount = Number(failedCountRow.rows[0]?.n ?? 0);
 
