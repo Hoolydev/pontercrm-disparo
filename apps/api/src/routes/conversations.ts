@@ -88,6 +88,10 @@ export async function registerConversations(app: FastifyInstance) {
           assignedBroker: { columns: { id: true, displayName: true } },
           campaign: { columns: { id: true, name: true, status: true } },
           messages: {
+            // Hide outbound messages still queued — only count "really
+            // happened" events (sent/delivered/read/failed/inbound).
+            where: (m, { not, and: relAnd, eq: relEq }) =>
+              not(relAnd(relEq(m.direction, "out"), relEq(m.status, "queued"))!),
             orderBy: [desc(schema.messages.createdAt)],
             limit: 1,
             columns: { id: true, content: true, senderType: true, createdAt: true, status: true }
@@ -116,6 +120,10 @@ export async function registerConversations(app: FastifyInstance) {
         agent: { columns: { id: true, name: true, model: true, type: true } },
         campaign: { columns: { id: true, name: true, status: true, pipelineId: true } },
         messages: {
+          // Hide outbound messages still queued — they only become visible
+          // when the worker transitions them to sent/failed.
+          where: (m, { not, and: relAnd, eq: relEq }) =>
+            not(relAnd(relEq(m.direction, "out"), relEq(m.status, "queued"))!),
           orderBy: [desc(schema.messages.createdAt)],
           limit: 60
         }
