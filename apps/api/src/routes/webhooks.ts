@@ -100,7 +100,27 @@ export async function registerWebhooks(app: FastifyInstance) {
       }
 
       const parsed = adapter.parseWebhook(payload, req.headers as Record<string, string>);
-      if (parsed.kind !== "message") return reply.code(200).send({ ok: true });
+      if (parsed.kind !== "message") {
+        // Persist anyway so we can diagnose unrecognized payloads after the
+        // fact (parser returning "ignored" used to drop silently with 200 OK).
+        try {
+          await db.insert(schema.webhookEvents).values({
+            id: newId(),
+            provider: `whatsapp:${provider}`,
+            source: instance.id,
+            dedupeKey: `wa-ignored:${instance.id}:${sha256(JSON.stringify(payload)).slice(0, 16)}`,
+            rawPayload: payload,
+            processedAt: new Date()
+          });
+        } catch {
+          // Dedupe collision on identical payload — ignore.
+        }
+        req.log.warn(
+          { instanceId, kind: parsed.kind, sample: JSON.stringify(payload).slice(0, 500) },
+          "webhook: payload not recognized as message — stored for diagnosis"
+        );
+        return reply.code(200).send({ ok: true, ignored: true });
+      }
 
       const { message } = parsed;
       const dedupeKey = `wa:${instance.id}:${message.providerMessageId}`;
