@@ -63,14 +63,47 @@ function attach<T>(name: string, handler: (data: T) => Promise<void>, concurrenc
     logger.error({ queue: name, jobId: job?.id, err: err.message }, "failed")
   );
   workers.push(w);
+  return w;
 }
 
 attach<InboundMessageJob>(QUEUE_NAMES.inboundMessage, (data) =>
   processInboundMessage(data, db, publisher, logger)
 );
-attach<OutboundMessageJob>(QUEUE_NAMES.outboundMessage, (data) =>
-  processOutboundMessage(data, db, publisher, logger), 3
+const outboundMessageWorker = attach<OutboundMessageJob>(
+  QUEUE_NAMES.outboundMessage,
+  (data) => processOutboundMessage(data, db, publisher, logger),
+  3
 );
+
+// Safety net: if a job exhausts all BullMQ retries, mark the message as
+// failed so it doesn't stay in `queued` forever. The job-handler-level
+// branches already mark failed before throwing, but this catches any
+// unexpected exception that escapes them (DB drop, lib error, etc).
+outboundMessageWorker.on("failed", async (job, err) => {
+  if (!job) return;
+  const attempts = job.attemptsMade;
+  const max = job.opts.attempts ?? 3;
+  if (attempts < max) return; // not terminal yet — BullMQ will retry
+  const data = job.data as OutboundMessageJob;
+  if (!data?.messageId) return;
+  try {
+    const { schema } = await import("@pointer/db");
+    const { eq } = await import("drizzle-orm");
+    await db
+      .update(schema.messages)
+      .set({ status: "failed" })
+      .where(eq(schema.messages.id, data.messageId));
+    logger.warn(
+      { messageId: data.messageId, err: err.message, attempts },
+      "outbound: marked failed after exhausted retries"
+    );
+  } catch (e) {
+    logger.error(
+      { messageId: data.messageId, err: String(e) },
+      "outbound: could not mark message failed"
+    );
+  }
+});
 attach<AiReplyJob>(QUEUE_NAMES.aiReply, (data) =>
   processAiReply(data, db, publisher, logger), 3
 );

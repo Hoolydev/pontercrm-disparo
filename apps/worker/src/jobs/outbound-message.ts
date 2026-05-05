@@ -71,7 +71,14 @@ export async function processOutboundMessage(
         { messageId, campaignId: conv.campaignId, waitMs },
         "outbound: campaign rate limit hit — re-throw for retry"
       );
-      // Throwing makes BullMQ retry; backoff defaults will handle the delay.
+      // Mark failed so the message doesn't sit in `queued` forever if all
+      // BullMQ retries also hit the rate limit. The user's retry-failed
+      // flow will pick it back up. On a successful subsequent retry, the
+      // success path below sets status='sent' (idempotent overwrite).
+      await db
+        .update(schema.messages)
+        .set({ status: "failed" })
+        .where(eq(schema.messages.id, messageId));
       throw new Error("campaign_rate_limit");
     }
   }
@@ -183,6 +190,14 @@ export async function processOutboundMessage(
 
   if (!instance) {
     logger.warn({ messageId }, "outbound: no available instance — will retry");
+    // Same reasoning as the campaign rate-limit branch above: mark failed so
+    // a message doesn't get stuck in `queued` forever when all instances
+    // are disconnected/rate-limited and BullMQ runs out of retries. The
+    // user can then surface it in the failed filter and re-trigger.
+    await db
+      .update(schema.messages)
+      .set({ status: "failed" })
+      .where(eq(schema.messages.id, messageId));
     throw new Error("no_instance_available"); // BullMQ retries
   }
 
