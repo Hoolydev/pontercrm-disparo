@@ -331,10 +331,25 @@ function RetryModal({
 }) {
   const [delaySeconds, setDelaySeconds] = useState(20);
   const [selectedInstanceIds, setSelectedInstanceIds] = useState<Set<string>>(new Set());
+  const [editTemplate, setEditTemplate] = useState(false);
+  const [overrideTemplate, setOverrideTemplate] = useState("");
+  const [handoffAgentId, setHandoffAgentId] = useState("");
 
   const instancesQuery = useQuery({
     queryKey: ["whatsapp-instances"],
     queryFn: () => api.get<{ instances: WhatsappInstance[] }>("/whatsapp-instances")
+  });
+
+  type RetryPreview = {
+    campaigns: { campaignId: string; campaignName: string; template: string | null }[];
+    uniformTemplate: string | null;
+    agents: { id: string; name: string }[];
+  };
+  const previewQuery = useQuery<RetryPreview>({
+    queryKey: ["retry-preview", conversationIds.join(",")],
+    queryFn: () =>
+      api.post<RetryPreview>("/conversations/retry-failed/preview", { conversationIds }),
+    enabled: conversationIds.length > 0
   });
 
   const availableInstances = useMemo(
@@ -349,6 +364,14 @@ function RetryModal({
     }
   }, [availableInstances, selectedInstanceIds.size]);
 
+  // Pre-fill the textarea with the campaign template once it loads, but only
+  // the first time — don't clobber user edits if the preview re-fetches.
+  useEffect(() => {
+    if (previewQuery.data?.uniformTemplate && overrideTemplate === "") {
+      setOverrideTemplate(previewQuery.data.uniformTemplate);
+    }
+  }, [previewQuery.data, overrideTemplate]);
+
   const retry = useMutation({
     mutationFn: () =>
       api.post<{ scheduled: number; skipped: number; etaMinutes: number }>(
@@ -356,7 +379,11 @@ function RetryModal({
         {
           conversationIds,
           instanceIds: Array.from(selectedInstanceIds),
-          delaySeconds
+          delaySeconds,
+          ...(editTemplate && overrideTemplate.trim()
+            ? { messageOverrideTemplate: overrideTemplate }
+            : {}),
+          ...(handoffAgentId ? { handoffAgentId } : {})
         }
       ),
     onSuccess: (res) => {
@@ -443,6 +470,80 @@ function RetryModal({
             {etaMinutes % 60}min)
           </p>
         </div>
+
+        {previewQuery.data && (
+          <div className="mt-5">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-neutral-800">
+                Mensagem da campanha
+              </label>
+              {previewQuery.data.campaigns.length === 1 && (
+                <span className="text-[10px] text-neutral-400">
+                  {previewQuery.data.campaigns[0]!.campaignName}
+                </span>
+              )}
+            </div>
+            {previewQuery.data.campaigns.length > 1 && (
+              <p className="mt-1 text-xs text-amber-700">
+                ⚠ {previewQuery.data.campaigns.length} campanhas diferentes selecionadas — o
+                texto aqui será usado para todas as conversas.
+              </p>
+            )}
+            <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-neutral-600">
+              <input
+                type="checkbox"
+                checked={editTemplate}
+                onChange={(e) => setEditTemplate(e.target.checked)}
+                className="h-4 w-4 accent-blue-600"
+              />
+              Editar mensagem antes de reenviar
+            </label>
+            {editTemplate ? (
+              <textarea
+                value={overrideTemplate}
+                onChange={(e) => setOverrideTemplate(e.target.value)}
+                rows={6}
+                className="mt-2 w-full rounded-md border border-neutral-300 px-3 py-2 text-xs font-mono"
+                placeholder={"Olá {{name}}, ..."}
+              />
+            ) : (
+              previewQuery.data.uniformTemplate && (
+                <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-mono text-neutral-600">
+                  {previewQuery.data.uniformTemplate}
+                </pre>
+              )
+            )}
+            <p className="mt-1 text-xs text-neutral-500">
+              Variáveis: <code>{"{{name}}"}</code>, <code>{"{{phone}}"}</code>,{" "}
+              <code>{"{{property_ref}}"}</code>, <code>{"{{origin}}"}</code>,{" "}
+              <code>{"{{campaign}}"}</code>. Aliases PT-BR: nome, telefone, imovel, origem,
+              campanha.
+            </p>
+          </div>
+        )}
+
+        {previewQuery.data?.agents && previewQuery.data.agents.length > 0 && (
+          <div className="mt-5">
+            <label className="text-sm font-medium text-neutral-800">
+              Agente para continuidade
+            </label>
+            <p className="text-xs text-neutral-500">
+              Quem responde quando o lead voltar. Vazio mantém o agente atual de cada conversa.
+            </p>
+            <select
+              value={handoffAgentId}
+              onChange={(e) => setHandoffAgentId(e.target.value)}
+              className="mt-2 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            >
+              <option value="">Manter agente atual</option>
+              {previewQuery.data.agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div className="mt-6 flex justify-end gap-2">
           <button

@@ -202,14 +202,64 @@ export async function registerConversations(app: FastifyInstance) {
     }
   );
 
+  // POST /conversations/retry-failed/preview
+  // Retorna template(s) da(s) campanha(s) das convs selecionadas + lista de
+  // agentes inbound para popular o dialog de reenvio. Não muta nada.
+  const previewSchema = z.object({
+    conversationIds: z.array(z.string().uuid()).min(1).max(5000)
+  });
+  app.post("/conversations/retry-failed/preview", auth, async (req, reply) => {
+    const parsed = previewSchema.safeParse(req.body);
+    if (!parsed.success) return reply.badRequest(parsed.error.message);
+    const db = getDb();
+
+    const rows = await db
+      .selectDistinct({
+        campaignId: schema.conversations.campaignId,
+        campaignName: schema.campaigns.name,
+        firstMessageTemplate: schema.campaigns.firstMessageTemplate
+      })
+      .from(schema.conversations)
+      .leftJoin(schema.campaigns, eq(schema.campaigns.id, schema.conversations.campaignId))
+      .where(inArray(schema.conversations.id, parsed.data.conversationIds));
+
+    const campaigns = rows
+      .filter((r) => r.campaignId)
+      .map((r) => ({
+        campaignId: r.campaignId!,
+        campaignName: r.campaignName ?? "Sem nome",
+        template: r.firstMessageTemplate ?? null
+      }));
+
+    // If all selected convs share the same campaign + template, pre-fill it.
+    const uniformTemplate =
+      campaigns.length === 1 ? campaigns[0]!.template : null;
+
+    const agents = await db.query.agents.findMany({
+      where: and(eq(schema.agents.type, "inbound"), eq(schema.agents.active, true)),
+      columns: { id: true, name: true }
+    });
+
+    return { campaigns, uniformTemplate, agents };
+  });
+
   // POST /conversations/retry-failed
   // Reenvia a última mensagem outbound falhada de cada conversa selecionada,
   // distribuindo entre as instâncias escolhidas (round-robin) e enfileirando
   // com delay incremental — anti-banimento.
+  //
+  // Optional fields:
+  //   - messageOverrideTemplate: replaces the original failed message content.
+  //     Supports {{name}}, {{phone}}, {{property_ref}}, {{origin}}, {{campaign}}
+  //     (PT-BR aliases too) — rendered per conversation.
+  //   - handoffAgentId: overrides conversations.agentId for the selected
+  //     conversations so the chosen inbound agent picks up replies.
   const retrySchema = z.object({
     conversationIds: z.array(z.string().uuid()).min(1).max(5000),
     instanceIds: z.array(z.string().uuid()).min(1).max(20),
-    delaySeconds: z.number().int().min(10).max(300)
+    delaySeconds: z.number().int().min(10).max(300),
+    messageOverrideTemplate: z.string().min(1).max(4000).optional(),
+    handoffAgentId: z.string().uuid().optional()
   });
   app.post("/conversations/retry-failed", auth, async (req, reply) => {
     const { role } = req.user;
@@ -218,7 +268,8 @@ export async function registerConversations(app: FastifyInstance) {
     const parsed = retrySchema.safeParse(req.body);
     if (!parsed.success) return reply.badRequest(parsed.error.message);
 
-    const { conversationIds, instanceIds, delaySeconds } = parsed.data;
+    const { conversationIds, instanceIds, delaySeconds, messageOverrideTemplate, handoffAgentId } =
+      parsed.data;
     const db = getDb();
 
     const instances = await db.query.whatsappInstances.findMany({
@@ -229,25 +280,45 @@ export async function registerConversations(app: FastifyInstance) {
     });
     if (instances.length === 0) return reply.badRequest("no active instances");
 
+    // Validate handoff agent up-front so we don't queue messages then 404 the
+    // agentId update afterwards.
+    if (handoffAgentId) {
+      const agent = await db.query.agents.findFirst({
+        where: and(
+          eq(schema.agents.id, handoffAgentId),
+          eq(schema.agents.type, "inbound"),
+          eq(schema.agents.active, true)
+        )
+      });
+      if (!agent) {
+        return reply.badRequest("handoffAgentId must be an active inbound agent");
+      }
+    }
+
     const queues = getQueues();
     const now = Date.now();
 
-    // One DISTINCT ON to fetch the latest failed message per conversation +
-    // the conversation's current sticky instance — replaces N×3 sequential
-    // queries with a single round-trip. Required: doing 964 conversations
-    // sequentially blew past the gateway timeout (~30-60s) and the
-    // mutation never resolved client-side.
+    // One DISTINCT ON to fetch the latest failed message per conversation,
+    // the sticky instance, and lead/campaign vars (used when
+    // messageOverrideTemplate is set so we can render per-conv).
     const candidates = await db
       .selectDistinctOn([schema.messages.conversationId], {
         conversationId: schema.messages.conversationId,
         content: schema.messages.content,
-        stickyInstanceId: schema.conversations.whatsappInstanceId
+        stickyInstanceId: schema.conversations.whatsappInstanceId,
+        leadName: schema.leads.name,
+        leadPhone: schema.leads.phone,
+        leadPropertyRef: schema.leads.propertyRef,
+        leadOrigin: schema.leads.origin,
+        campaignName: schema.campaigns.name
       })
       .from(schema.messages)
       .innerJoin(
         schema.conversations,
         eq(schema.conversations.id, schema.messages.conversationId)
       )
+      .innerJoin(schema.leads, eq(schema.leads.id, schema.conversations.leadId))
+      .leftJoin(schema.campaigns, eq(schema.campaigns.id, schema.conversations.campaignId))
       .where(
         and(
           inArray(schema.messages.conversationId, conversationIds),
@@ -270,14 +341,23 @@ export async function registerConversations(app: FastifyInstance) {
     eligible.forEach((row, i) => {
       const instance = instances[i % instances.length]!;
       const msgId = newId();
-      const contentHash = sha256(`${row.content}|retry|${now}|${msgId}`);
+      const content = messageOverrideTemplate
+        ? renderRetryTemplate(messageOverrideTemplate, {
+            name: row.leadName,
+            phone: row.leadPhone,
+            property_ref: row.leadPropertyRef,
+            origin: row.leadOrigin,
+            campaign: row.campaignName
+          })
+        : (row.content ?? "");
+      const contentHash = sha256(`${content}|retry|${now}|${msgId}`);
       newMessages.push({
         id: msgId,
         conversationId: row.conversationId,
         direction: "out",
         senderType: "ai",
         instanceId: instance.id,
-        content: row.content,
+        content,
         contentHash,
         status: "queued"
       });
@@ -300,6 +380,18 @@ export async function registerConversations(app: FastifyInstance) {
         .update(schema.conversations)
         .set({ whatsappInstanceId: instId })
         .where(inArray(schema.conversations.id, convIds));
+    }
+
+    if (handoffAgentId && eligible.length > 0) {
+      await db
+        .update(schema.conversations)
+        .set({ agentId: handoffAgentId })
+        .where(
+          inArray(
+            schema.conversations.id,
+            eligible.map((e) => e.conversationId)
+          )
+        );
     }
 
     if (jobs.length > 0) {
@@ -410,4 +502,40 @@ export async function registerConversations(app: FastifyInstance) {
       return { ok: true };
     }
   );
+}
+
+// Mirror of renderTemplate / VAR_ALIASES from packages/agent-engine/src/run.ts.
+// Duplicated here to keep the retry-failed override flow self-contained
+// without exporting engine internals. Keep behavior aligned with the engine
+// — if the engine's substitution rules evolve, update this too.
+const RETRY_VAR_ALIASES: Record<string, string> = {
+  name: "name",
+  phone: "phone",
+  property_ref: "property_ref",
+  origin: "origin",
+  campaign: "campaign",
+  nome: "name",
+  telefone: "phone",
+  celular: "phone",
+  whatsapp: "phone",
+  imovel: "property_ref",
+  imovel_ref: "property_ref",
+  codigo: "property_ref",
+  origem: "origin",
+  campanha: "campaign"
+};
+
+function renderRetryTemplate(
+  template: string,
+  vars: Record<string, string | null | undefined>
+): string {
+  const sub = (m: string, key: string) => {
+    const canonical = RETRY_VAR_ALIASES[String(key).toLowerCase()];
+    if (!canonical) return m;
+    const v = vars[canonical];
+    return v == null ? "" : String(v);
+  };
+  return template
+    .replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, sub)
+    .replace(/\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}/g, sub);
 }
