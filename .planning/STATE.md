@@ -20,6 +20,7 @@
 | 2026-05-04 | campaign-blast-attachments-fix | ✓ | Bug: blast outbound fast path em run.ts não enviava `campaign_attachments` (vídeo da campanha nunca chegava). Fix: depois do texto, enfileira N rows de mídia (uma por anexo), com delay textDelay + (i+1)*3000ms. |
 | 2026-05-04 | instances-resilient-decrypt-error-ui | ✓ | Bug: `/app/instances` ficava em "Carregando…" eterno. Raiz: GET 500ava se uma row tinha configJson corrompido. Fix: try/catch por row no backend + branch isError com mensagem visível no frontend. Tela branca no clique de "Nova instância" segue aberta — depende de log do console do user. |
 | 2026-05-04 | retry-failed-batch-rewrite | ✓ | Bug: reenviar 964 mensagens falhadas travava em "Agendando…" (gateway timeout). Raiz: loop sequencial fazia ~6000 ops em série. Fix: selectDistinctOn + bulk insert + addBulk → ~3-5 ops totais, finaliza em ~1-2s. |
+| 2026-05-05 | cleanup-duplicate-queued-messages | ✓ | Script ops `apps/api/src/cleanup_duplicate_queued.ts` para limpar duplicatas geradas pelos cliques múltiplos no retry-failed antes do fix de batch. Dry-run default; --execute deleta. Best-effort remove BullMQ jobs também. |
 
 ## Plano de refactor (5 anti-padrões — ordem de execução)
 
