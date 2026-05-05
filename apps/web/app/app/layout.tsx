@@ -1,4 +1,5 @@
 "use client";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -8,6 +9,10 @@ import { NotificationsBell } from "../../components/NotificationsBell";
 import { Onboarding, maybeShowOnboarding } from "../../components/Onboarding";
 import { clearToken } from "../../lib/session";
 import { useSession } from "../../lib/use-session";
+
+// Same logo used by the public landing + login screens — keeps brand
+// consistent across the marketing surface and the internal app.
+const LOGO_URL = "https://www.pointerimoveis.net.br/assets/img/logos/logo.webp";
 
 type NavItemDef = {
   href: string;
@@ -123,15 +128,15 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             </button>
           ) : (
             <>
-              <div className="flex items-center gap-2.5">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-pi-primary">
-                  <BrandGlyph />
-                </div>
-                <div className="leading-tight">
-                  <div className="text-sm font-bold text-white tracking-tight">Pointer</div>
-                  <div className="text-[10px] font-medium text-pi-primary -mt-0.5">Imóveis</div>
-                </div>
-              </div>
+              <Image
+                src={LOGO_URL}
+                alt="Pointer Imóveis"
+                width={140}
+                height={36}
+                className="h-9 w-auto object-contain"
+                unoptimized
+                priority
+              />
               <button
                 onClick={() => setCollapsed(true)}
                 className="flex h-6 w-6 items-center justify-center rounded-md bg-white/5 text-white/40 hover:text-white"
