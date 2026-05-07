@@ -1,6 +1,7 @@
 import { getToken } from "./session";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3333";
+export const API_BASE_URL = BASE;
 
 type RequestInit2 = RequestInit & { params?: Record<string, string> };
 

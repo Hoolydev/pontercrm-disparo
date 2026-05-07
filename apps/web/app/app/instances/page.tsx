@@ -1,7 +1,7 @@
 "use client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { api } from "../../../lib/api";
+import { api, API_BASE_URL } from "../../../lib/api";
 
 type Instance = {
   id: string;
@@ -113,6 +113,14 @@ export default function InstancesPage() {
   const [fields, setFields] = useState<ProviderFields>({ ...PROVIDER_DEFAULTS.uazapi });
   const [qrData, setQrData] = useState<{ id: string; qr: string | null } | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  // After creating a Meta instance, surface the exact webhook URL + verify
+  // token the user must paste into Meta Developer Console. The verify token
+  // is only visible at this moment — once the instance is listed, the
+  // backend masks it.
+  const [metaSetup, setMetaSetup] = useState<
+    | { id: string; verifyToken: string | null; number: string }
+    | null
+  >(null);
 
   function changeProvider(p: Provider) {
     setProvider(p);
@@ -127,13 +135,19 @@ export default function InstancesPage() {
         rateLimitPerMinute: rate,
         configJson: { ...fields }
       }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["instances"] });
+      const createdNumber = number;
+      const verifyToken = fields.verifyToken ?? null;
+      const createdProvider = provider;
       setShowForm(false);
       setNumber("");
       setFields({ ...PROVIDER_DEFAULTS[provider] });
-      setSuccessMsg(`Instância ${number} criada com sucesso!`);
+      setSuccessMsg(`Instância ${createdNumber} criada com sucesso!`);
       setTimeout(() => setSuccessMsg(null), 4000);
+      if (createdProvider === "meta") {
+        setMetaSetup({ id: res.id, verifyToken, number: createdNumber });
+      }
     }
   });
 
@@ -255,11 +269,8 @@ export default function InstancesPage() {
 
           {provider === "meta" && (
             <p className="mt-3 text-[11px] text-neutral-500">
-              Webhook URL do Meta:{" "}
-              <code className="bg-neutral-100 px-1 rounded">
-                /webhooks/whatsapp/meta/&lt;instance-id&gt;
-              </code>{" "}
-              · Configure após criar a instância.
+              Após criar a instância, exibimos a URL completa do webhook
+              pronta para colar no Meta Developer Console.
             </p>
           )}
           {provider === "evolution" && (
@@ -309,6 +320,16 @@ export default function InstancesPage() {
             }
           `}</style>
         </div>
+      )}
+
+      {/* Meta webhook setup modal — shown right after creating a Meta instance */}
+      {metaSetup && (
+        <MetaWebhookModal
+          id={metaSetup.id}
+          number={metaSetup.number}
+          verifyToken={metaSetup.verifyToken}
+          onClose={() => setMetaSetup(null)}
+        />
       )}
 
       {/* QR Modal (uazapi only) */}
@@ -403,6 +424,21 @@ export default function InstancesPage() {
               </div>
 
               <div className="mt-3 flex flex-wrap gap-2">
+                {inst.provider === "meta" && (
+                  <button
+                    onClick={() =>
+                      setMetaSetup({
+                        id: inst.id,
+                        verifyToken: null,
+                        number: inst.number
+                      })
+                    }
+                    className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                    title="Mostrar URL de webhook para configurar no Meta"
+                  >
+                    Webhook Meta
+                  </button>
+                )}
                 {inst.provider === "uazapi" && (
                   <>
                     <button
@@ -483,6 +519,147 @@ function Field({
       <label className="block text-xs font-medium text-neutral-600 mb-1">{label}</label>
       {children}
       {hint && <p className="mt-1 text-[10px] text-neutral-400">{hint}</p>}
+    </div>
+  );
+}
+
+function MetaWebhookModal({
+  id,
+  number,
+  verifyToken,
+  onClose
+}: {
+  id: string;
+  number: string;
+  verifyToken: string | null;
+  onClose: () => void;
+}) {
+  const webhookUrl = `${API_BASE_URL}/webhooks/whatsapp/meta/${id}`;
+  const [copied, setCopied] = useState<string | null>(null);
+
+  function copy(value: string, key: string) {
+    navigator.clipboard.writeText(value).then(() => {
+      setCopied(key);
+      setTimeout(() => setCopied(null), 1500);
+    });
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-xl">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h2 className="text-base font-semibold text-neutral-900">
+              Configurar webhook no Meta
+            </h2>
+            <p className="text-xs text-neutral-500 mt-0.5">
+              Instância {number} — cole estes valores em{" "}
+              <span className="font-medium">
+                Meta Developer Console → WhatsApp → Configuration → Webhooks
+              </span>
+              .
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-neutral-400 hover:text-neutral-600 text-lg leading-none"
+            aria-label="Fechar"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-neutral-600 mb-1">
+              Callback URL
+            </label>
+            <div className="flex gap-2">
+              <input
+                readOnly
+                value={webhookUrl}
+                onFocus={(e) => e.currentTarget.select()}
+                className="flex-1 rounded-lg border border-neutral-200 px-3 py-2 text-xs font-mono bg-neutral-50"
+              />
+              <button
+                onClick={() => copy(webhookUrl, "url")}
+                className="rounded-lg bg-pi-primary px-3 py-2 text-xs font-medium text-white hover:opacity-90 whitespace-nowrap"
+              >
+                {copied === "url" ? "Copiado ✓" : "Copiar"}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-neutral-600 mb-1">
+              Verify Token
+            </label>
+            {verifyToken ? (
+              <div className="flex gap-2">
+                <input
+                  readOnly
+                  value={verifyToken}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="flex-1 rounded-lg border border-neutral-200 px-3 py-2 text-xs font-mono bg-neutral-50"
+                />
+                <button
+                  onClick={() => copy(verifyToken, "token")}
+                  className="rounded-lg bg-pi-primary px-3 py-2 text-xs font-medium text-white hover:opacity-90 whitespace-nowrap"
+                >
+                  {copied === "token" ? "Copiado ✓" : "Copiar"}
+                </button>
+              </div>
+            ) : (
+              <p className="text-xs text-neutral-500 italic">
+                Use o mesmo Verify Token que você cadastrou ao criar a instância.
+                Por segurança ele não é exibido depois — se esqueceu, edite a
+                instância e atualize o valor.
+              </p>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+            <p className="text-xs font-medium text-amber-800 mb-1">
+              Antes de clicar &quot;Verificar e salvar&quot; no Meta:
+            </p>
+            <ul className="text-[11px] text-amber-700 list-disc pl-4 space-y-0.5">
+              <li>
+                Confirme que a API está deployada e acessível no domínio acima.
+              </li>
+              <li>
+                Em &quot;Webhook fields&quot;, assine{" "}
+                <code className="bg-amber-100 px-1 rounded">messages</code>.
+              </li>
+              <li>
+                Se a verificação falhar, teste a URL no terminal — veja o
+                rodapé deste modal.
+              </li>
+            </ul>
+          </div>
+
+          <details className="text-[11px] text-neutral-600">
+            <summary className="cursor-pointer hover:text-neutral-900">
+              Testar manualmente com curl
+            </summary>
+            <pre className="mt-2 bg-neutral-900 text-neutral-100 rounded-lg p-3 text-[10px] overflow-x-auto">
+{`curl -i "${webhookUrl}?hub.mode=subscribe&hub.challenge=ping&hub.verify_token=${verifyToken ?? "<seu-token>"}"`}
+            </pre>
+            <p className="mt-1 text-[10px] text-neutral-500">
+              Esperado: <span className="font-mono">200 OK</span> com body{" "}
+              <span className="font-mono">ping</span>.
+            </p>
+          </details>
+        </div>
+
+        <div className="mt-5 flex justify-end">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-neutral-200 px-4 py-2 text-sm text-neutral-600 hover:bg-neutral-50"
+          >
+            Fechar
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

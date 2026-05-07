@@ -18,7 +18,7 @@ export class MetaCloudProvider implements WhatsAppProvider {
 
   async sendText(input: OutboundText, config: ProviderConfig): Promise<SendResult> {
     const phoneNumberId = config.phoneNumberId as string;
-    const accessToken = config.token as string;
+    const accessToken = (config.accessToken ?? config.token) as string;
     const res = await request(`${GRAPH_API}/${phoneNumberId}/messages`, {
       method: "POST",
       headers: {
@@ -41,7 +41,7 @@ export class MetaCloudProvider implements WhatsAppProvider {
 
   async sendMedia(input: OutboundMedia, config: ProviderConfig): Promise<SendResult> {
     const phoneNumberId = config.phoneNumberId as string;
-    const accessToken = config.token as string;
+    const accessToken = (config.accessToken ?? config.token) as string;
     const typeMap: Record<string, string> = {
       image: "image",
       audio: "audio",
@@ -141,8 +141,11 @@ export class MetaCloudProvider implements WhatsAppProvider {
     if (!appSecret) return false;
     const sig = headers["x-hub-signature-256"] ?? "";
     const expected = `sha256=${createHmac("sha256", appSecret).update(payload).digest("hex")}`;
+    const sigBuf = Buffer.from(sig);
+    const expBuf = Buffer.from(expected);
+    if (sigBuf.length !== expBuf.length) return false;
     try {
-      return timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+      return timingSafeEqual(sigBuf, expBuf);
     } catch {
       return false;
     }
