@@ -51,17 +51,60 @@ export async function registerInstances(app: FastifyInstance) {
     const id = newId();
     const number = normalizeE164(body.data.number);
 
+    // Meta has no QR step — if the access token + phone_number_id resolve on
+    // the Graph API, the instance is good to go. We probe immediately and
+    // persist the resolved status, so dispatchers (which require
+    // status='connected') can use the instance right away.
+    let initialStatus: "pending" | "connected" | "disconnected" = "pending";
+    let externalId = id;
+    let probeError: string | null = null;
+
+    if (body.data.provider === "meta") {
+      const cfg = body.data.configJson as {
+        phoneNumberId?: string;
+        accessToken?: string;
+        token?: string;
+      };
+      const accessToken = cfg.accessToken ?? cfg.token;
+      if (!cfg.phoneNumberId || !accessToken) {
+        return reply.badRequest("meta requires phoneNumberId + accessToken");
+      }
+      try {
+        const { request } = await import("undici");
+        const res = await request(
+          `https://graph.facebook.com/v19.0/${encodeURIComponent(cfg.phoneNumberId)}`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          initialStatus = "connected";
+          externalId = cfg.phoneNumberId;
+        } else {
+          initialStatus = "disconnected";
+          const txt = await res.body.text().catch(() => "");
+          probeError = `Graph API ${res.statusCode}: ${txt.slice(0, 200)}`;
+          app.log.warn(
+            { phoneNumberId: cfg.phoneNumberId, status: res.statusCode },
+            "meta instance probe failed"
+          );
+        }
+      } catch (err) {
+        initialStatus = "disconnected";
+        probeError = err instanceof Error ? err.message : String(err);
+        app.log.warn({ err }, "meta instance probe threw");
+      }
+    }
+
     await db.insert(schema.whatsappInstances).values({
       id,
       provider: body.data.provider,
-      externalId: id, // overridden when provider returns its own id
+      externalId,
       number,
-      status: "pending",
+      status: initialStatus,
       rateLimitPerMinute: body.data.rateLimitPerMinute,
       configJson: encryptJson(body.data.configJson, config.ENCRYPTION_KEY),
       active: true
     });
-    return reply.code(201).send({ id });
+    return reply.code(201).send({ id, status: initialStatus, probeError });
   });
 
   app.patch<{ Params: { id: string } }>("/whatsapp-instances/:id", adminGuard, async (req, reply) => {
@@ -149,8 +192,36 @@ export async function registerInstances(app: FastifyInstance) {
       });
       if (!row) return reply.notFound();
 
+      // Meta: probe Graph API; if 2xx → connected, else disconnected.
+      if (row.provider === "meta") {
+        const cfgM = decryptJson(
+          row.configJson as Record<string, unknown>,
+          config.ENCRYPTION_KEY
+        ) as { phoneNumberId?: string; accessToken?: string; token?: string };
+        const accessToken = cfgM.accessToken ?? cfgM.token;
+        if (!cfgM.phoneNumberId || !accessToken) {
+          return reply.badRequest("missing phoneNumberId or accessToken");
+        }
+        const { request } = await import("undici");
+        const probe = await request(
+          `https://graph.facebook.com/v19.0/${encodeURIComponent(cfgM.phoneNumberId)}`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        ).catch((err) => ({ statusCode: 0, body: { text: async () => String(err) } as any }));
+        const ok = probe.statusCode >= 200 && probe.statusCode < 300;
+        const next = ok ? "connected" : "disconnected";
+        await db
+          .update(schema.whatsappInstances)
+          .set({ status: next })
+          .where(eq(schema.whatsappInstances.id, row.id));
+        return {
+          status: next,
+          probedPath: `graph.facebook.com/v19.0/${cfgM.phoneNumberId}`,
+          raw: { httpStatus: probe.statusCode }
+        };
+      }
+
       if (row.provider !== "uazapi") {
-        return reply.badRequest("refresh-status only supported for uazapi");
+        return reply.badRequest("refresh-status only supported for uazapi/meta");
       }
 
       const cfg = decryptJson(

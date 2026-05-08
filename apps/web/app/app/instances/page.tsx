@@ -425,19 +425,32 @@ export default function InstancesPage() {
 
               <div className="mt-3 flex flex-wrap gap-2">
                 {inst.provider === "meta" && (
-                  <button
-                    onClick={() =>
-                      setMetaSetup({
-                        id: inst.id,
-                        verifyToken: null,
-                        number: inst.number
-                      })
-                    }
-                    className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
-                    title="Mostrar URL de webhook para configurar no Meta"
-                  >
-                    Webhook Meta
-                  </button>
+                  <>
+                    <button
+                      onClick={() =>
+                        setMetaSetup({
+                          id: inst.id,
+                          verifyToken: null,
+                          number: inst.number
+                        })
+                      }
+                      className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                      title="Mostrar URL de webhook para configurar no Meta"
+                    >
+                      Webhook Meta
+                    </button>
+                    <button
+                      onClick={() => refreshStatusMutation.mutate(inst.id)}
+                      disabled={refreshStatusMutation.isPending}
+                      className="rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+                      title="Valida o token na Graph API e atualiza o status"
+                    >
+                      {refreshStatusMutation.isPending &&
+                      refreshStatusMutation.variables === inst.id
+                        ? "Verificando…"
+                        : "↻ Verificar conexão"}
+                    </button>
+                  </>
                 )}
                 {inst.provider === "uazapi" && (
                   <>
