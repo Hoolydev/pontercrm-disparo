@@ -216,9 +216,24 @@ export async function processOutboundMessage(
   const config = decryptJson(instance.configJson, encKey) as { baseUrl?: string; token?: string };
 
   try {
-    // Branch: media message (PDF/image/video) vs plain text.
-    // The send_property tool sets media_url + media_type='document'.
-    const result = msg.mediaUrl
+    // Three branches, in priority order:
+    //   1) Meta-template payload set on the message → fire as `type: "template"`.
+    //      Required for the very first outbound message on Meta provider when
+    //      there's no open 24h window. Falls through to text if the provider
+    //      doesn't implement sendTemplate (e.g. Uazapi).
+    //   2) Media message (PDF/image/video) — set by the send_property tool.
+    //   3) Plain text — default path for replies in-window.
+    const result = msg.metaTemplatePayload && provider.sendTemplate
+      ? await provider.sendTemplate(
+          {
+            to: conv.lead.phone,
+            name: msg.metaTemplatePayload.name,
+            language: msg.metaTemplatePayload.language,
+            bodyParams: msg.metaTemplatePayload.bodyParams
+          },
+          config
+        )
+      : msg.mediaUrl
       ? await provider.sendMedia(
           {
             to: conv.lead.phone,

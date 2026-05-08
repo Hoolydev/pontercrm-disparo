@@ -20,6 +20,19 @@ export type CampaignSettings = {
   };
 };
 
+/**
+ * Per-slot mapping for a Meta-approved template's {{1}}, {{2}}, ... params.
+ * The outbound first-touch worker walks this array in order and substitutes
+ * each entry into the corresponding {{N}} of the template body.
+ *
+ * - `field`: pulls a value from lead/campaign — name, phone, propertyRef,
+ *   origin, campaign.
+ * - `literal`: a fixed string. Useful for a static greeting prefix.
+ */
+export type MetaTemplateParamSpec =
+  | { source: "field"; field: "name" | "phone" | "propertyRef" | "origin" | "campaign" }
+  | { source: "literal"; value: string };
+
 export const campaigns = pgTable(
   "campaigns",
   {
@@ -44,6 +57,19 @@ export const campaigns = pgTable(
      * AI takes over normally on the lead's reply.
      */
     firstMessageTemplate: text("first_message_template"),
+    /**
+     * Meta Cloud API native template (HSM) used as the very first outbound
+     * message when the conversation is sent through a `meta` provider
+     * instance. Required by Meta whenever there's no 24h window open.
+     * `metaTemplateName` is the template name as registered (and approved)
+     * in the WhatsApp Manager; `metaTemplateLanguage` is e.g. "pt_BR";
+     * `metaTemplateParamMap` describes how to fill {{1}}, {{2}}, ....
+     * If unset, Meta-provider seeds fall back to plain text — which Meta
+     * will reject outside the 24h window.
+     */
+    metaTemplateName: text("meta_template_name"),
+    metaTemplateLanguage: text("meta_template_language"),
+    metaTemplateParamMap: jsonb("meta_template_param_map").$type<MetaTemplateParamSpec[]>(),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
     updatedAt: updatedAt()

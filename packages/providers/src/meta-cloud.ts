@@ -3,6 +3,7 @@ import { request } from "undici";
 import type {
   IncomingMessage,
   OutboundMedia,
+  OutboundTemplate,
   OutboundText,
   ParsedWebhook,
   ProviderConfig,
@@ -68,6 +69,45 @@ export class MetaCloudProvider implements WhatsAppProvider {
     const body = (await res.body.json()) as any;
     const msgId = body?.messages?.[0]?.id;
     if (!msgId) throw new Error(`Meta sendMedia failed: ${JSON.stringify(body)}`);
+    return { providerMessageId: msgId };
+  }
+
+  async sendTemplate(input: OutboundTemplate, config: ProviderConfig): Promise<SendResult> {
+    const phoneNumberId = config.phoneNumberId as string;
+    const accessToken = (config.accessToken ?? config.token) as string;
+    // Meta requires every {{N}} in the template body to be filled. We always
+    // emit a single `body` component with positional parameters in the order
+    // the template author defined them (covers the vast majority of cases —
+    // headers, footers, and buttons are deliberately out of scope here).
+    const components = input.bodyParams.length
+      ? [
+          {
+            type: "body",
+            parameters: input.bodyParams.map((text) => ({ type: "text", text }))
+          }
+        ]
+      : [];
+    const res = await request(`${GRAPH_API}/${phoneNumberId}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: input.to,
+        type: "template",
+        template: {
+          name: input.name,
+          language: { code: input.language },
+          components
+        }
+      })
+    });
+    const body = (await res.body.json()) as any;
+    const msgId = body?.messages?.[0]?.id;
+    if (!msgId) throw new Error(`Meta sendTemplate failed: ${JSON.stringify(body)}`);
     return { providerMessageId: msgId };
   }
 

@@ -9,6 +9,19 @@ export type ToolCallRecord = {
   arguments: Record<string, unknown>;
 };
 
+/**
+ * When set, the outbound worker dispatches this message as a Meta Cloud API
+ * `type: "template"` payload instead of plain text. `content` still carries
+ * the rendered preview (so the inbox shows what was sent), but the wire
+ * format used against Graph API is the structured template payload.
+ */
+export type MetaTemplateMessagePayload = {
+  name: string;
+  language: string;
+  /** Already-resolved {{1}}, {{2}}, ... values for the BODY component. */
+  bodyParams: string[];
+};
+
 export const messages = pgTable(
   "messages",
   {
@@ -28,6 +41,7 @@ export const messages = pgTable(
     providerMessageId: text("provider_message_id"),
     status: text("status").$type<MessageStatus>().notNull().default("queued"),
     toolCalls: jsonb("tool_calls").$type<ToolCallRecord[]>(),
+    metaTemplatePayload: jsonb("meta_template_payload_json").$type<MetaTemplateMessagePayload>(),
     createdAt: createdAt(),
     updatedAt: updatedAt()
   },

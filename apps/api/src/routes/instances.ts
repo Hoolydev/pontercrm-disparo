@@ -304,6 +304,88 @@ export async function registerInstances(app: FastifyInstance) {
     }
   );
 
+  // GET /whatsapp-instances/:id/meta-templates — list message templates from
+  // the WhatsApp Business Account behind a Meta instance. Used by the
+  // campaign editor to pick the approved template for outbound first-touch.
+  // We only proxy the read, never cache server-side — the source of truth
+  // is the WhatsApp Manager.
+  app.get<{
+    Params: { id: string };
+    Querystring: { status?: string };
+  }>("/whatsapp-instances/:id/meta-templates", authGuard, async (req, reply) => {
+    const db = getDb();
+    const row = await db.query.whatsappInstances.findFirst({
+      where: eq(schema.whatsappInstances.id, req.params.id)
+    });
+    if (!row) return reply.notFound();
+    if (row.provider !== "meta") {
+      return reply.badRequest("templates only supported for meta provider");
+    }
+
+    const cfg = decryptJson(
+      row.configJson as Record<string, unknown>,
+      config.ENCRYPTION_KEY
+    ) as { businessAccountId?: string; accessToken?: string; token?: string };
+    const wabaId = cfg.businessAccountId;
+    const accessToken = cfg.accessToken ?? cfg.token;
+    if (!wabaId || !accessToken) {
+      return reply.badRequest("missing businessAccountId or accessToken");
+    }
+
+    const { request } = await import("undici");
+    // Pull a generous batch — most accounts have <50 templates.
+    const url =
+      `https://graph.facebook.com/v19.0/${encodeURIComponent(wabaId)}/message_templates` +
+      `?fields=name,language,status,category,components&limit=200`;
+    const res = await request(url, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (res.statusCode >= 400) {
+      const text = await res.body.text().catch(() => "");
+      return reply.code(502).send({
+        error: "graph_api_error",
+        statusCode: res.statusCode,
+        body: text.slice(0, 500)
+      });
+    }
+    const body = (await res.body.json()) as {
+      data?: Array<{
+        name: string;
+        language: string;
+        status: string;
+        category?: string;
+        components?: Array<Record<string, unknown>>;
+      }>;
+    };
+
+    const all = body.data ?? [];
+    const filterStatus = req.query.status?.toUpperCase();
+    const filtered = filterStatus
+      ? all.filter((t) => t.status?.toUpperCase() === filterStatus)
+      : all;
+
+    // Surface body-component param count so the UI can show the right number
+    // of mapping slots without re-parsing on the client.
+    const enriched = filtered.map((t) => {
+      const body = (t.components ?? []).find(
+        (c: any) => String(c.type).toUpperCase() === "BODY"
+      ) as { text?: string } | undefined;
+      const placeholderCount = body?.text
+        ? Array.from(body.text.matchAll(/\{\{\s*\d+\s*\}\}/g)).length
+        : 0;
+      return {
+        name: t.name,
+        language: t.language,
+        status: t.status,
+        category: t.category ?? null,
+        bodyText: body?.text ?? null,
+        bodyParamCount: placeholderCount
+      };
+    });
+
+    return { templates: enriched };
+  });
+
   app.delete<{ Params: { id: string } }>("/whatsapp-instances/:id", adminGuard, async (req, reply) => {
     const db = getDb();
     await db.delete(schema.whatsappInstances).where(eq(schema.whatsappInstances.id, req.params.id));

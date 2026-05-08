@@ -4,11 +4,18 @@ import { useParams, useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { api } from "../../../../lib/api";
 
+type MetaTemplateParamSpec =
+  | { source: "field"; field: "name" | "phone" | "propertyRef" | "origin" | "campaign" }
+  | { source: "literal"; value: string };
+
 type CampaignDetail = {
   id: string;
   name: string;
   status: "draft" | "active" | "paused" | "archived";
   firstMessageTemplate: string | null;
+  metaTemplateName: string | null;
+  metaTemplateLanguage: string | null;
+  metaTemplateParamMap: MetaTemplateParamSpec[] | null;
   settingsJson: {
     delay_range_ms?: [number, number];
     max_messages_per_minute?: number;
@@ -20,6 +27,15 @@ type CampaignDetail = {
   inboundAgent: { id: string; name: string; type: string } | null;
   pipeline: { id: string; name: string };
   instances: { instance: { id: string; number: string; provider: string; status: string } }[];
+};
+
+type MetaTemplate = {
+  name: string;
+  language: string;
+  status: string;
+  category: string | null;
+  bodyText: string | null;
+  bodyParamCount: number;
 };
 
 type Attachment = {
@@ -86,6 +102,34 @@ export default function CampaignDetailPage() {
   const tplMut = useMutation({
     mutationFn: (firstMessageTemplate: string | null) =>
       api.patch(`/campaigns/${id}`, { firstMessageTemplate }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["campaign", id] })
+  });
+
+  // Meta template (HSM) — pulled from the WhatsApp Manager via the first
+  // Meta instance attached to this campaign. The campaign editor only
+  // supports body-component templates; header/footer/buttons aren't
+  // mapped (they fire with empty values and the template is rejected if
+  // those slots are required).
+  const metaInstanceId =
+    detailQ.data?.campaign.instances.find(
+      (ci) => ci.instance.provider === "meta"
+    )?.instance.id ?? null;
+
+  const metaTemplatesQ = useQuery({
+    queryKey: ["meta-templates", metaInstanceId],
+    enabled: !!metaInstanceId,
+    queryFn: () =>
+      api.get<{ templates: MetaTemplate[] }>(
+        `/whatsapp-instances/${metaInstanceId}/meta-templates?status=APPROVED`
+      )
+  });
+
+  const metaTplMut = useMutation({
+    mutationFn: (payload: {
+      metaTemplateName: string | null;
+      metaTemplateLanguage: string | null;
+      metaTemplateParamMap: MetaTemplateParamSpec[] | null;
+    }) => api.patch(`/campaigns/${id}`, payload),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["campaign", id] })
   });
 
@@ -423,6 +467,17 @@ export default function CampaignDetailPage() {
         </div>
       </div>
 
+      {/* Meta-approved template (HSM) */}
+      <MetaTemplateSection
+        camp={camp}
+        metaInstanceId={metaInstanceId}
+        templates={metaTemplatesQ.data?.templates ?? []}
+        loading={metaTemplatesQ.isLoading}
+        error={metaTemplatesQ.error}
+        onSave={(payload) => metaTplMut.mutate(payload)}
+        saving={metaTplMut.isPending}
+      />
+
       {/* Campaign attachments */}
       <div className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
         <h2 className="mb-1 text-xs font-semibold text-neutral-500 uppercase tracking-wide">
@@ -707,6 +762,267 @@ function Field({
       <label className="block text-xs font-medium text-neutral-600 mb-1">{label}</label>
       {children}
       {hint && <p className="mt-1 text-[10px] text-neutral-400">{hint}</p>}
+    </div>
+  );
+}
+
+const FIELD_OPTIONS: Array<{
+  value: "name" | "phone" | "propertyRef" | "origin" | "campaign";
+  label: string;
+}> = [
+  { value: "name", label: "Nome do lead" },
+  { value: "phone", label: "Telefone" },
+  { value: "propertyRef", label: "Referência do imóvel" },
+  { value: "origin", label: "Origem" },
+  { value: "campaign", label: "Nome da campanha" }
+];
+
+function MetaTemplateSection({
+  camp,
+  metaInstanceId,
+  templates,
+  loading,
+  error,
+  onSave,
+  saving
+}: {
+  camp: CampaignDetail;
+  metaInstanceId: string | null;
+  templates: MetaTemplate[];
+  loading: boolean;
+  error: unknown;
+  onSave: (payload: {
+    metaTemplateName: string | null;
+    metaTemplateLanguage: string | null;
+    metaTemplateParamMap: MetaTemplateParamSpec[] | null;
+  }) => void;
+  saving: boolean;
+}) {
+  // The "selected template" is identified by name+language. We keep the
+  // dropdown's value as a JSON-encoded {name,language} so React can compare
+  // by string.
+  const currentKey =
+    camp.metaTemplateName && camp.metaTemplateLanguage
+      ? JSON.stringify({ name: camp.metaTemplateName, language: camp.metaTemplateLanguage })
+      : "";
+  const [draftKey, setDraftKey] = useState<string>(currentKey);
+  const [draftMap, setDraftMap] = useState<MetaTemplateParamSpec[] | null>(
+    camp.metaTemplateParamMap ?? null
+  );
+
+  const selected = (() => {
+    if (!draftKey) return null;
+    try {
+      const { name, language } = JSON.parse(draftKey);
+      return templates.find((t) => t.name === name && t.language === language) ?? null;
+    } catch {
+      return null;
+    }
+  })();
+
+  // Re-sync local draft when the campaign or selected template changes.
+  const expectedSlots = selected?.bodyParamCount ?? 0;
+  const map = draftMap ?? camp.metaTemplateParamMap ?? [];
+
+  function ensureMapLength(target: number): MetaTemplateParamSpec[] {
+    const next = [...map];
+    while (next.length < target) {
+      next.push({ source: "field", field: "name" });
+    }
+    next.length = target;
+    return next;
+  }
+
+  function updateSlot(idx: number, spec: MetaTemplateParamSpec) {
+    const next = ensureMapLength(expectedSlots);
+    next[idx] = spec;
+    setDraftMap(next);
+  }
+
+  if (!metaInstanceId) {
+    return (
+      <div className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
+        <h2 className="mb-1 text-xs font-semibold text-neutral-500 uppercase tracking-wide">
+          Template Meta (HSM oficial)
+        </h2>
+        <p className="text-[11px] text-neutral-400">
+          Esta campanha não tem nenhuma instância <strong>Meta Cloud API</strong>{" "}
+          atrelada. Adicione uma instância Meta na seção de instâncias acima
+          para configurar um template oficial.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
+      <h2 className="mb-1 text-xs font-semibold text-neutral-500 uppercase tracking-wide">
+        Template Meta (HSM oficial)
+      </h2>
+      <p className="text-[11px] text-neutral-400 mb-3">
+        Lista os templates <strong>aprovados</strong> no WhatsApp Manager.
+        Quando configurado, o primeiro disparo outbound de cada lead vai como{" "}
+        <code>type: "template"</code> — obrigatório fora da janela de 24h.
+        Crie templates novos diretamente no Meta Business Manager.
+      </p>
+
+      {loading && <p className="text-xs text-neutral-400">Carregando templates…</p>}
+      {Boolean(error) && (
+        <div className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-[11px] text-red-700">
+          Erro ao buscar templates da Meta:{" "}
+          {error instanceof Error ? error.message : "desconhecido"}
+        </div>
+      )}
+
+      {!loading && !error && templates.length === 0 && (
+        <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] text-amber-800">
+          Nenhum template <strong>aprovado</strong> nesta WABA. Crie e aguarde
+          aprovação no Meta Business Manager → WhatsApp → Message Templates.
+        </div>
+      )}
+
+      {!loading && !error && templates.length > 0 && (
+        <div className="space-y-3">
+          <Field
+            label="Template aprovado"
+            hint="Nome · idioma (categoria) — só listamos os APROVADOS"
+          >
+            <select
+              value={draftKey}
+              onChange={(e) => {
+                setDraftKey(e.target.value);
+                setDraftMap(null);
+              }}
+              className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pi-primary"
+            >
+              <option value="">— Não usar template Meta —</option>
+              {templates.map((t) => (
+                <option
+                  key={`${t.name}::${t.language}`}
+                  value={JSON.stringify({ name: t.name, language: t.language })}
+                >
+                  {t.name} · {t.language}
+                  {t.category ? ` (${t.category})` : ""}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          {selected?.bodyText && (
+            <div className="rounded-md bg-neutral-50 border border-neutral-200 px-3 py-2 text-[11px] text-neutral-700 font-mono whitespace-pre-wrap">
+              {selected.bodyText}
+            </div>
+          )}
+
+          {selected && expectedSlots > 0 && (
+            <div className="space-y-2">
+              <p className="text-[11px] font-medium text-neutral-600">
+                Mapear parâmetros (
+                {expectedSlots === 1 ? "1 slot" : `${expectedSlots} slots`}):
+              </p>
+              {Array.from({ length: expectedSlots }).map((_, idx) => {
+                const slotMap = ensureMapLength(expectedSlots);
+                const spec = slotMap[idx];
+                return (
+                  <div key={idx} className="flex items-center gap-2">
+                    <span className="text-[11px] text-neutral-500 w-12 font-mono">
+                      {`{{${idx + 1}}}`}
+                    </span>
+                    <select
+                      value={spec.source}
+                      onChange={(e) => {
+                        const src = e.target.value as "field" | "literal";
+                        if (src === "literal") {
+                          updateSlot(idx, { source: "literal", value: "" });
+                        } else {
+                          updateSlot(idx, { source: "field", field: "name" });
+                        }
+                      }}
+                      className="rounded-lg border border-neutral-200 px-2 py-1.5 text-xs"
+                    >
+                      <option value="field">Campo do lead</option>
+                      <option value="literal">Texto fixo</option>
+                    </select>
+                    {spec.source === "field" ? (
+                      <select
+                        value={spec.field}
+                        onChange={(e) =>
+                          updateSlot(idx, {
+                            source: "field",
+                            field: e.target.value as MetaTemplateParamSpec extends {
+                              source: "field";
+                              field: infer F;
+                            }
+                              ? F
+                              : never
+                          })
+                        }
+                        className="flex-1 rounded-lg border border-neutral-200 px-2 py-1.5 text-xs"
+                      >
+                        {FIELD_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        value={spec.value}
+                        onChange={(e) =>
+                          updateSlot(idx, { source: "literal", value: e.target.value })
+                        }
+                        placeholder="Texto fixo"
+                        className="flex-1 rounded-lg border border-neutral-200 px-2 py-1.5 text-xs"
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button
+              disabled={saving}
+              onClick={() => {
+                if (!draftKey) {
+                  onSave({
+                    metaTemplateName: null,
+                    metaTemplateLanguage: null,
+                    metaTemplateParamMap: null
+                  });
+                  return;
+                }
+                if (!selected) return;
+                onSave({
+                  metaTemplateName: selected.name,
+                  metaTemplateLanguage: selected.language,
+                  metaTemplateParamMap: ensureMapLength(expectedSlots)
+                });
+              }}
+              className="rounded-lg bg-pi-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {saving ? "Salvando…" : "Salvar template Meta"}
+            </button>
+            {camp.metaTemplateName && (
+              <button
+                onClick={() => {
+                  setDraftKey("");
+                  setDraftMap(null);
+                  onSave({
+                    metaTemplateName: null,
+                    metaTemplateLanguage: null,
+                    metaTemplateParamMap: null
+                  });
+                }}
+                className="rounded-lg border border-neutral-200 px-4 py-2 text-sm text-neutral-600 hover:bg-neutral-50"
+              >
+                Remover
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

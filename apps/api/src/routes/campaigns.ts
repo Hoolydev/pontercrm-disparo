@@ -27,13 +27,24 @@ const settingsSchema = z
   })
   .strict();
 
+const metaTemplateParamSchema = z.discriminatedUnion("source", [
+  z.object({
+    source: z.literal("field"),
+    field: z.enum(["name", "phone", "propertyRef", "origin", "campaign"])
+  }),
+  z.object({ source: z.literal("literal"), value: z.string().max(500) })
+]);
+
 const createBody = z.object({
   name: z.string().min(1).max(160),
   outboundAgentId: z.string().uuid().nullable().optional(),
   inboundAgentId: z.string().uuid().nullable().optional(),
   pipelineId: z.string().uuid().optional(),
   settingsJson: settingsSchema.optional(),
-  firstMessageTemplate: z.string().max(2000).nullable().optional()
+  firstMessageTemplate: z.string().max(2000).nullable().optional(),
+  metaTemplateName: z.string().max(160).nullable().optional(),
+  metaTemplateLanguage: z.string().max(20).nullable().optional(),
+  metaTemplateParamMap: z.array(metaTemplateParamSchema).max(20).nullable().optional()
 });
 
 const patchBody = createBody.partial().extend({

@@ -211,19 +211,74 @@ export async function runAgent(
     (agent.firstMessage && agent.firstMessage.trim()) ||
     conv.campaign?.firstMessageTemplate ||
     null;
+
+  // ── Meta-template short-circuit ──────────────────────────────────────
+  // If this conversation will dispatch through a Meta provider instance AND
+  // the campaign has a Meta-approved template configured, the very first
+  // outbound MUST be sent as `type: "template"` (Meta rejects free text
+  // outside the 24h window). We resolve the bodyParams here and stamp them
+  // on the message — the outbound worker reads metaTemplatePayload and
+  // routes to provider.sendTemplate.
+  let metaTemplate: { name: string; language: string; bodyParams: string[] } | null = null;
   if (
     mode === "outbound" &&
     firstTouch &&
     ctx.history.length === 0 &&
-    firstMessageTpl
+    conv.campaign?.metaTemplateName &&
+    conv.campaign?.metaTemplateLanguage &&
+    conv.whatsappInstanceId
   ) {
-    const text = renderTemplate(firstMessageTpl, {
-      name: conv.lead.name,
-      phone: conv.lead.phone,
-      property_ref: conv.lead.propertyRef,
-      origin: conv.lead.origin,
-      campaign: conv.campaign?.name ?? null
+    const stickyInst = await db.query.whatsappInstances.findFirst({
+      where: eq(schema.whatsappInstances.id, conv.whatsappInstanceId),
+      columns: { provider: true }
     });
+    if (stickyInst?.provider === "meta") {
+      const map = conv.campaign.metaTemplateParamMap ?? [];
+      const bodyParams = map.map((spec) => {
+        if (spec.source === "literal") return spec.value;
+        switch (spec.field) {
+          case "name":
+            return conv.lead.name ?? "";
+          case "phone":
+            return conv.lead.phone ?? "";
+          case "propertyRef":
+            return conv.lead.propertyRef ?? "";
+          case "origin":
+            return conv.lead.origin ?? "";
+          case "campaign":
+            return conv.campaign?.name ?? "";
+          default:
+            return "";
+        }
+      });
+      metaTemplate = {
+        name: conv.campaign.metaTemplateName,
+        language: conv.campaign.metaTemplateLanguage,
+        bodyParams
+      };
+    }
+  }
+
+  if (
+    mode === "outbound" &&
+    firstTouch &&
+    ctx.history.length === 0 &&
+    (firstMessageTpl || metaTemplate)
+  ) {
+    // Inbox preview text. Prefer the human-friendly first-message template
+    // if present (so agents see the same copy regardless of wire format);
+    // otherwise show the resolved template params for traceability.
+    const text = firstMessageTpl
+      ? renderTemplate(firstMessageTpl, {
+          name: conv.lead.name,
+          phone: conv.lead.phone,
+          property_ref: conv.lead.propertyRef,
+          origin: conv.lead.origin,
+          campaign: conv.campaign?.name ?? null
+        })
+      : metaTemplate
+      ? `[Template Meta: ${metaTemplate.name}] ${metaTemplate.bodyParams.join(" · ")}`
+      : "";
 
     let aiMsgIdTpl: string | null = null;
     const textDelay = pickDelay({
@@ -240,7 +295,8 @@ export async function runAgent(
         senderType: "ai",
         content: text,
         contentHash,
-        status: "queued"
+        status: "queued",
+        metaTemplatePayload: metaTemplate ?? undefined
       });
       await db
         .update(schema.conversations)
