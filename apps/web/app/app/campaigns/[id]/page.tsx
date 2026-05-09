@@ -86,6 +86,30 @@ export default function CampaignDetailPage() {
     queryFn: () => api.get<{ instances: Instance[] }>("/whatsapp-instances")
   });
 
+  const agentsQ = useQuery({
+    queryKey: ["agents"],
+    queryFn: () =>
+      api.get<{ agents: Array<{ id: string; name: string; type: string }> }>(
+        "/agents"
+      )
+  });
+
+  const pipelinesQ = useQuery({
+    queryKey: ["pipelines"],
+    queryFn: () =>
+      api.get<{ pipelines: Array<{ id: string; name: string }> }>("/pipelines")
+  });
+
+  const basicsMut = useMutation({
+    mutationFn: (payload: {
+      name?: string;
+      pipelineId?: string;
+      outboundAgentId?: string | null;
+      inboundAgentId?: string | null;
+    }) => api.patch(`/campaigns/${id}`, payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["campaign", id] })
+  });
+
   const lifecycleMut = useMutation({
     mutationFn: (action: "start" | "pause" | "resume" | "archive") =>
       api.post(`/campaigns/${id}/${action}`),
@@ -269,6 +293,16 @@ export default function CampaignDetailPage() {
           <StatusActions status={camp.status} onAction={(a) => lifecycleMut.mutate(a)} />
         </div>
       </div>
+
+      {/* Configurações gerais (editar nome, pipeline, agentes) */}
+      <BasicsCard
+        camp={camp}
+        agents={agentsQ.data?.agents ?? []}
+        pipelines={pipelinesQ.data?.pipelines ?? []}
+        loading={agentsQ.isLoading || pipelinesQ.isLoading}
+        onSave={(payload) => basicsMut.mutate(payload)}
+        saving={basicsMut.isPending}
+      />
 
       {/* Lead counts */}
       <div className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
@@ -788,6 +822,159 @@ const FIELD_OPTIONS: Array<{
   { value: "origin", label: "Origem" },
   { value: "campaign", label: "Nome da campanha" }
 ];
+
+function BasicsCard({
+  camp,
+  agents,
+  pipelines,
+  loading,
+  onSave,
+  saving
+}: {
+  camp: CampaignDetail;
+  agents: Array<{ id: string; name: string; type: string }>;
+  pipelines: Array<{ id: string; name: string }>;
+  loading: boolean;
+  onSave: (payload: {
+    name?: string;
+    pipelineId?: string;
+    outboundAgentId?: string | null;
+    inboundAgentId?: string | null;
+  }) => void;
+  saving: boolean;
+}) {
+  const [name, setName] = useState(camp.name);
+  const [pipelineId, setPipelineId] = useState(camp.pipeline.id);
+  const [outboundAgentId, setOutboundAgentId] = useState<string>(
+    camp.outboundAgent?.id ?? ""
+  );
+  const [inboundAgentId, setInboundAgentId] = useState<string>(
+    camp.inboundAgent?.id ?? ""
+  );
+
+  const dirty =
+    name.trim() !== camp.name ||
+    pipelineId !== camp.pipeline.id ||
+    outboundAgentId !== (camp.outboundAgent?.id ?? "") ||
+    inboundAgentId !== (camp.inboundAgent?.id ?? "");
+
+  const outbounds = agents.filter(
+    (a) => a.type === "outbound" || a.type === "hybrid"
+  );
+  const inbounds = agents.filter(
+    (a) => a.type === "inbound" || a.type === "hybrid"
+  );
+
+  return (
+    <div className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
+      <h2 className="mb-1 text-xs font-semibold text-neutral-500 uppercase tracking-wide">
+        Configurações gerais
+      </h2>
+      <p className="text-[11px] text-neutral-400 mb-3">
+        Nome, funil e agentes de IA. Para anexar/trocar o número de WhatsApp,
+        use a seção <strong>Números de WhatsApp</strong> abaixo. Para o
+        template Meta aprovado, use <strong>Template Meta (HSM oficial)</strong>{" "}
+        — só aparece após anexar uma instância Meta.
+      </p>
+
+      {loading ? (
+        <p className="text-xs text-neutral-400">Carregando opções…</p>
+      ) : (
+        <div className="space-y-3">
+          <Field label="Nome da campanha">
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pi-primary"
+            />
+          </Field>
+
+          <Field label="Funil (pipeline)">
+            <select
+              value={pipelineId}
+              onChange={(e) => setPipelineId(e.target.value)}
+              className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+            >
+              {pipelines.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field
+              label="Agente outbound"
+              hint="Roda no primeiro toque e até o lead responder."
+            >
+              <select
+                value={outboundAgentId}
+                onChange={(e) => setOutboundAgentId(e.target.value)}
+                className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+              >
+                <option value="">— sem agente —</option>
+                {outbounds.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} ({a.type})
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field
+              label="Agente inbound"
+              hint="Assume após o lead responder."
+            >
+              <select
+                value={inboundAgentId}
+                onChange={(e) => setInboundAgentId(e.target.value)}
+                className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+              >
+                <option value="">— sem agente —</option>
+                {inbounds.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} ({a.type})
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              disabled={!dirty || !name.trim() || saving}
+              onClick={() =>
+                onSave({
+                  name: name.trim(),
+                  pipelineId,
+                  outboundAgentId: outboundAgentId || null,
+                  inboundAgentId: inboundAgentId || null
+                })
+              }
+              className="rounded-lg bg-pi-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {saving ? "Salvando…" : "Salvar"}
+            </button>
+            {dirty && (
+              <button
+                onClick={() => {
+                  setName(camp.name);
+                  setPipelineId(camp.pipeline.id);
+                  setOutboundAgentId(camp.outboundAgent?.id ?? "");
+                  setInboundAgentId(camp.inboundAgent?.id ?? "");
+                }}
+                className="rounded-lg border border-neutral-200 px-4 py-2 text-sm text-neutral-600 hover:bg-neutral-50"
+              >
+                Descartar alterações
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function MetaTemplateSection({
   camp,
