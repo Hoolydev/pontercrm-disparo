@@ -5,8 +5,14 @@ import { useRef, useState } from "react";
 import { api } from "../../../../lib/api";
 
 type MetaTemplateParamSpec =
-  | { source: "field"; field: "name" | "phone" | "propertyRef" | "origin" | "campaign" }
-  | { source: "literal"; value: string };
+  | { source: "field"; field: "name" | "phone" | "propertyRef" | "origin" | "campaign"; name?: string }
+  | { source: "literal"; value: string; name?: string };
+
+type MetaTemplateHeaderSpec = {
+  type: "video" | "image" | "document";
+  source: "link" | "mediaId";
+  value: string;
+};
 
 type CampaignDetail = {
   id: string;
@@ -16,6 +22,7 @@ type CampaignDetail = {
   metaTemplateName: string | null;
   metaTemplateLanguage: string | null;
   metaTemplateParamMap: MetaTemplateParamSpec[] | null;
+  metaTemplateHeader: MetaTemplateHeaderSpec | null;
   settingsJson: {
     delay_range_ms?: [number, number];
     max_messages_per_minute?: number;
@@ -36,6 +43,10 @@ type MetaTemplate = {
   category: string | null;
   bodyText: string | null;
   bodyParamCount: number;
+  /** Names of body placeholders if the template uses named ({{nome}}). Null if positional. */
+  bodyParamNames: string[] | null;
+  /** "VIDEO" | "IMAGE" | "DOCUMENT" | "TEXT" | null. Drives header media input. */
+  headerFormat: "VIDEO" | "IMAGE" | "DOCUMENT" | "TEXT" | null;
 };
 
 type Attachment = {
@@ -129,6 +140,7 @@ export default function CampaignDetailPage() {
       metaTemplateName: string | null;
       metaTemplateLanguage: string | null;
       metaTemplateParamMap: MetaTemplateParamSpec[] | null;
+      metaTemplateHeader: MetaTemplateHeaderSpec | null;
     }) => api.patch(`/campaigns/${id}`, payload),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["campaign", id] })
   });
@@ -795,6 +807,7 @@ function MetaTemplateSection({
     metaTemplateName: string | null;
     metaTemplateLanguage: string | null;
     metaTemplateParamMap: MetaTemplateParamSpec[] | null;
+    metaTemplateHeader: MetaTemplateHeaderSpec | null;
   }) => void;
   saving: boolean;
 }) {
@@ -809,6 +822,9 @@ function MetaTemplateSection({
   const [draftMap, setDraftMap] = useState<MetaTemplateParamSpec[] | null>(
     camp.metaTemplateParamMap ?? null
   );
+  const [draftHeader, setDraftHeader] = useState<MetaTemplateHeaderSpec | null>(
+    camp.metaTemplateHeader ?? null
+  );
 
   const selected = (() => {
     if (!draftKey) return null;
@@ -822,7 +838,18 @@ function MetaTemplateSection({
 
   // Re-sync local draft when the campaign or selected template changes.
   const expectedSlots = selected?.bodyParamCount ?? 0;
+  const placeholderNames = selected?.bodyParamNames ?? null;
   const map = draftMap ?? camp.metaTemplateParamMap ?? [];
+
+  // Header media is required ONLY when the template's HEADER is non-text.
+  const headerKind: "video" | "image" | "document" | null = (() => {
+    switch (selected?.headerFormat) {
+      case "VIDEO": return "video";
+      case "IMAGE": return "image";
+      case "DOCUMENT": return "document";
+      default: return null;
+    }
+  })();
 
   function ensureMapLength(target: number): MetaTemplateParamSpec[] {
     const next = [...map];
@@ -830,12 +857,19 @@ function MetaTemplateSection({
       next.push({ source: "field", field: "name" });
     }
     next.length = target;
+    // Stamp `name` from the template's named placeholders so the worker
+    // sends `parameter_name`. For positional templates this stays undefined.
+    if (placeholderNames) {
+      for (let i = 0; i < next.length; i++) {
+        next[i] = { ...next[i], name: placeholderNames[i] };
+      }
+    }
     return next;
   }
 
   function updateSlot(idx: number, spec: MetaTemplateParamSpec) {
     const next = ensureMapLength(expectedSlots);
-    next[idx] = spec;
+    next[idx] = placeholderNames ? { ...spec, name: placeholderNames[idx] } : spec;
     setDraftMap(next);
   }
 
@@ -914,19 +948,75 @@ function MetaTemplateSection({
             </div>
           )}
 
+          {selected && headerKind && (
+            <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+              <p className="text-[11px] font-medium text-amber-900">
+                Header de {headerKind} obrigatório
+              </p>
+              <p className="text-[10px] text-amber-700">
+                A Meta exige a mídia do header para enviar este template. Use{" "}
+                <strong>media_id</strong> (mais confiável — recomendado fazer
+                upload no Meta via <code>POST /media</code> e colar o id) ou um{" "}
+                <strong>link público HTTPS</strong> (Meta CDN tenta baixar; URLs
+                de hotlink, ex.: <code>scontent.whatsapp.net</code>, podem
+                falhar silenciosamente).
+              </p>
+              <div className="flex gap-2">
+                <select
+                  value={draftHeader?.source ?? "link"}
+                  onChange={(e) =>
+                    setDraftHeader({
+                      type: headerKind,
+                      source: e.target.value as "link" | "mediaId",
+                      value: draftHeader?.value ?? ""
+                    })
+                  }
+                  className="rounded-lg border border-amber-300 px-2 py-1.5 text-xs"
+                >
+                  <option value="link">Link (URL pública)</option>
+                  <option value="mediaId">media_id (upload Meta)</option>
+                </select>
+                <input
+                  value={draftHeader?.value ?? ""}
+                  onChange={(e) =>
+                    setDraftHeader({
+                      type: headerKind,
+                      source: draftHeader?.source ?? "link",
+                      value: e.target.value
+                    })
+                  }
+                  placeholder={
+                    draftHeader?.source === "mediaId"
+                      ? "1666620241334804"
+                      : "https://exemplo.com/video.mp4"
+                  }
+                  className="flex-1 rounded-lg border border-amber-300 px-2 py-1.5 text-xs font-mono"
+                />
+              </div>
+            </div>
+          )}
+
           {selected && expectedSlots > 0 && (
             <div className="space-y-2">
               <p className="text-[11px] font-medium text-neutral-600">
                 Mapear parâmetros (
-                {expectedSlots === 1 ? "1 slot" : `${expectedSlots} slots`}):
+                {expectedSlots === 1 ? "1 slot" : `${expectedSlots} slots`})
+                {placeholderNames && (
+                  <span className="ml-1 text-[10px] text-emerald-700">
+                    · template usa placeholders nomeados
+                  </span>
+                )}
+                :
               </p>
               {Array.from({ length: expectedSlots }).map((_, idx) => {
                 const slotMap = ensureMapLength(expectedSlots);
                 const spec = slotMap[idx];
                 return (
                   <div key={idx} className="flex items-center gap-2">
-                    <span className="text-[11px] text-neutral-500 w-12 font-mono">
-                      {`{{${idx + 1}}}`}
+                    <span className="text-[11px] text-neutral-500 w-16 font-mono">
+                      {placeholderNames
+                        ? `{{${placeholderNames[idx]}}}`
+                        : `{{${idx + 1}}}`}
                     </span>
                     <select
                       value={spec.source}
@@ -989,7 +1079,8 @@ function MetaTemplateSection({
                   onSave({
                     metaTemplateName: null,
                     metaTemplateLanguage: null,
-                    metaTemplateParamMap: null
+                    metaTemplateParamMap: null,
+                    metaTemplateHeader: null
                   });
                   return;
                 }
@@ -997,7 +1088,15 @@ function MetaTemplateSection({
                 onSave({
                   metaTemplateName: selected.name,
                   metaTemplateLanguage: selected.language,
-                  metaTemplateParamMap: ensureMapLength(expectedSlots)
+                  metaTemplateParamMap: ensureMapLength(expectedSlots),
+                  metaTemplateHeader:
+                    headerKind && draftHeader?.value
+                      ? {
+                          type: headerKind,
+                          source: draftHeader.source,
+                          value: draftHeader.value
+                        }
+                      : null
                 });
               }}
               className="rounded-lg bg-pi-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
@@ -1009,10 +1108,12 @@ function MetaTemplateSection({
                 onClick={() => {
                   setDraftKey("");
                   setDraftMap(null);
+                  setDraftHeader(null);
                   onSave({
                     metaTemplateName: null,
                     metaTemplateLanguage: null,
-                    metaTemplateParamMap: null
+                    metaTemplateParamMap: null,
+                    metaTemplateHeader: null
                   });
                 }}
                 className="rounded-lg border border-neutral-200 px-4 py-2 text-sm text-neutral-600 hover:bg-neutral-50"

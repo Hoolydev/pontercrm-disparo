@@ -21,17 +21,35 @@ export type CampaignSettings = {
 };
 
 /**
- * Per-slot mapping for a Meta-approved template's {{1}}, {{2}}, ... params.
- * The outbound first-touch worker walks this array in order and substitutes
- * each entry into the corresponding {{N}} of the template body.
+ * Per-slot mapping for a Meta-approved template's body placeholders. The
+ * outbound first-touch worker walks this array in order and substitutes each
+ * entry into the corresponding placeholder of the template body.
  *
  * - `field`: pulls a value from lead/campaign — name, phone, propertyRef,
  *   origin, campaign.
  * - `literal`: a fixed string. Useful for a static greeting prefix.
+ *
+ * `name` (optional) is the Meta `parameter_name` for templates that use
+ * named placeholders like `{{nome}}` instead of positional `{{1}}`. When set
+ * it is stamped onto the send payload; otherwise the slot is sent positional.
  */
 export type MetaTemplateParamSpec =
-  | { source: "field"; field: "name" | "phone" | "propertyRef" | "origin" | "campaign" }
-  | { source: "literal"; value: string };
+  | { source: "field"; field: "name" | "phone" | "propertyRef" | "origin" | "campaign"; name?: string }
+  | { source: "literal"; value: string; name?: string };
+
+/**
+ * Header media spec for templates that have a non-text HEADER component
+ * (video / image / document). Two ways to feed the media to Meta:
+ *
+ * - `link`: a public HTTPS URL the Meta CDN can fetch.
+ * - `mediaId`: a previously-uploaded media id from `POST /{phone_id}/media`.
+ *   Recommended — Meta caches the asset and avoids hotlink failures.
+ */
+export type MetaTemplateHeaderSpec = {
+  type: "video" | "image" | "document";
+  source: "link" | "mediaId";
+  value: string;
+};
 
 export const campaigns = pgTable(
   "campaigns",
@@ -70,6 +88,13 @@ export const campaigns = pgTable(
     metaTemplateName: text("meta_template_name"),
     metaTemplateLanguage: text("meta_template_language"),
     metaTemplateParamMap: jsonb("meta_template_param_map").$type<MetaTemplateParamSpec[]>(),
+    /**
+     * Optional. Required for templates whose HEADER is video/image/document.
+     * If null, the worker omits the header component — works only when the
+     * template's HEADER is text/none. Send-time, header is materialized into
+     * `{ type:"header", parameters:[{ type:"video", video:{ id|link } }] }`.
+     */
+    metaTemplateHeader: jsonb("meta_template_header_json").$type<MetaTemplateHeaderSpec | null>(),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
     updatedAt: updatedAt()

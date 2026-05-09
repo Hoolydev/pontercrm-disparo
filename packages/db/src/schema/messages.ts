@@ -18,8 +18,16 @@ export type ToolCallRecord = {
 export type MetaTemplateMessagePayload = {
   name: string;
   language: string;
-  /** Already-resolved {{1}}, {{2}}, ... values for the BODY component. */
+  /** Already-resolved values for the BODY component, in slot order. */
   bodyParams: string[];
+  /** Optional `parameter_name` per slot — required for named templates. */
+  bodyParamNames?: string[];
+  /** Optional non-text HEADER (video/image/document). */
+  header?: {
+    type: "video" | "image" | "document";
+    link?: string;
+    mediaId?: string;
+  };
 };
 
 export const messages = pgTable(

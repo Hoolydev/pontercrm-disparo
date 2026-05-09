@@ -30,10 +30,21 @@ const settingsSchema = z
 const metaTemplateParamSchema = z.discriminatedUnion("source", [
   z.object({
     source: z.literal("field"),
-    field: z.enum(["name", "phone", "propertyRef", "origin", "campaign"])
+    field: z.enum(["name", "phone", "propertyRef", "origin", "campaign"]),
+    name: z.string().max(120).optional()
   }),
-  z.object({ source: z.literal("literal"), value: z.string().max(500) })
+  z.object({
+    source: z.literal("literal"),
+    value: z.string().max(500),
+    name: z.string().max(120).optional()
+  })
 ]);
+
+const metaTemplateHeaderSchema = z.object({
+  type: z.enum(["video", "image", "document"]),
+  source: z.enum(["link", "mediaId"]),
+  value: z.string().min(1).max(2000)
+});
 
 const createBody = z.object({
   name: z.string().min(1).max(160),
@@ -44,7 +55,8 @@ const createBody = z.object({
   firstMessageTemplate: z.string().max(2000).nullable().optional(),
   metaTemplateName: z.string().max(160).nullable().optional(),
   metaTemplateLanguage: z.string().max(20).nullable().optional(),
-  metaTemplateParamMap: z.array(metaTemplateParamSchema).max(20).nullable().optional()
+  metaTemplateParamMap: z.array(metaTemplateParamSchema).max(20).nullable().optional(),
+  metaTemplateHeader: metaTemplateHeaderSchema.nullable().optional()
 });
 
 const patchBody = createBody.partial().extend({
