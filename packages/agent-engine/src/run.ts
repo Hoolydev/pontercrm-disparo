@@ -219,7 +219,19 @@ export async function runAgent(
   // outside the 24h window). We resolve the bodyParams here and stamp them
   // on the message — the outbound worker reads metaTemplatePayload and
   // routes to provider.sendTemplate.
-  let metaTemplate: { name: string; language: string; bodyParams: string[] } | null = null;
+  let metaTemplate:
+    | {
+        name: string;
+        language: string;
+        bodyParams: string[];
+        bodyParamNames?: string[];
+        header?: {
+          type: "video" | "image" | "document";
+          link?: string;
+          mediaId?: string;
+        };
+      }
+    | null = null;
   if (
     mode === "outbound" &&
     firstTouch &&
@@ -251,10 +263,30 @@ export async function runAgent(
             return "";
         }
       });
+      // Named-param support: if any slot has a `name`, we send all slots
+      // named (Meta forbids mixing named + positional within a single
+      // component). Slots without `name` fall back to positional `{{N}}`
+      // keyed by index — used by older templates.
+      const someNamed = map.some((s) => !!s.name);
+      const bodyParamNames = someNamed
+        ? map.map((s) => s.name ?? "")
+        : undefined;
+      const headerSpec = conv.campaign.metaTemplateHeader ?? null;
       metaTemplate = {
         name: conv.campaign.metaTemplateName,
         language: conv.campaign.metaTemplateLanguage,
-        bodyParams
+        bodyParams,
+        ...(bodyParamNames ? { bodyParamNames } : {}),
+        ...(headerSpec
+          ? {
+              header: {
+                type: headerSpec.type,
+                ...(headerSpec.source === "mediaId"
+                  ? { mediaId: headerSpec.value }
+                  : { link: headerSpec.value })
+              }
+            }
+          : {})
       };
     }
   }

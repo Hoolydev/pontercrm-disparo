@@ -75,18 +75,34 @@ export class MetaCloudProvider implements WhatsAppProvider {
   async sendTemplate(input: OutboundTemplate, config: ProviderConfig): Promise<SendResult> {
     const phoneNumberId = config.phoneNumberId as string;
     const accessToken = (config.accessToken ?? config.token) as string;
-    // Meta requires every {{N}} in the template body to be filled. We always
-    // emit a single `body` component with positional parameters in the order
-    // the template author defined them (covers the vast majority of cases —
-    // headers, footers, and buttons are deliberately out of scope here).
-    const components = input.bodyParams.length
-      ? [
-          {
-            type: "body",
-            parameters: input.bodyParams.map((text) => ({ type: "text", text }))
-          }
-        ]
-      : [];
+    // Meta requires every placeholder in the template body to be filled. We
+    // emit (in order): an optional HEADER component for video/image/document
+    // headers, then the BODY component. If `bodyParamNames` is supplied (same
+    // length as `bodyParams`), each parameter carries `parameter_name` — Meta
+    // requires this for templates approved with named placeholders like
+    // `{{nome}}`. Otherwise we send positional `{type:text, text}`.
+    const components: Array<Record<string, unknown>> = [];
+    if (input.header) {
+      const mediaObj: Record<string, string> = {};
+      if (input.header.mediaId) mediaObj.id = input.header.mediaId;
+      else if (input.header.link) mediaObj.link = input.header.link;
+      components.push({
+        type: "header",
+        parameters: [{ type: input.header.type, [input.header.type]: mediaObj }]
+      });
+    }
+    if (input.bodyParams.length) {
+      const names = input.bodyParamNames ?? [];
+      components.push({
+        type: "body",
+        parameters: input.bodyParams.map((text, i) => {
+          const named = names[i];
+          return named
+            ? { type: "text", parameter_name: named, text }
+            : { type: "text", text };
+        })
+      });
+    }
     const res = await request(`${GRAPH_API}/${phoneNumberId}/messages`, {
       method: "POST",
       headers: {
@@ -101,7 +117,7 @@ export class MetaCloudProvider implements WhatsAppProvider {
         template: {
           name: input.name,
           language: { code: input.language },
-          components
+          ...(components.length ? { components } : {})
         }
       })
     });

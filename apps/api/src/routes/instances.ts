@@ -203,20 +203,47 @@ export async function registerInstances(app: FastifyInstance) {
           return reply.badRequest("missing phoneNumberId or accessToken");
         }
         const { request } = await import("undici");
-        const probe = await request(
-          `https://graph.facebook.com/v19.0/${encodeURIComponent(cfgM.phoneNumberId)}`,
-          { headers: { Authorization: `Bearer ${accessToken}` } }
-        ).catch((err) => ({ statusCode: 0, body: { text: async () => String(err) } as any }));
-        const ok = probe.statusCode >= 200 && probe.statusCode < 300;
+        let httpStatus = 0;
+        let bodyText = "";
+        let networkError: string | null = null;
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), 8000);
+        try {
+          const probe = await request(
+            `https://graph.facebook.com/v19.0/${encodeURIComponent(cfgM.phoneNumberId)}`,
+            {
+              headers: { Authorization: `Bearer ${accessToken}` },
+              signal: ac.signal,
+              headersTimeout: 8000,
+              bodyTimeout: 8000
+            }
+          );
+          httpStatus = probe.statusCode;
+          bodyText = await probe.body.text().catch(() => "");
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          networkError = ac.signal.aborted
+            ? `timeout após 8s — Graph API não respondeu (verifique conectividade/firewall)`
+            : msg;
+        } finally {
+          clearTimeout(timer);
+        }
+        const ok = httpStatus >= 200 && httpStatus < 300;
         const next = ok ? "connected" : "disconnected";
         await db
           .update(schema.whatsappInstances)
           .set({ status: next })
           .where(eq(schema.whatsappInstances.id, row.id));
+        const probeError = ok
+          ? null
+          : networkError
+          ? `network: ${networkError}`
+          : `Graph API ${httpStatus}: ${bodyText.slice(0, 400)}`;
         return {
           status: next,
           probedPath: `graph.facebook.com/v19.0/${cfgM.phoneNumberId}`,
-          raw: { httpStatus: probe.statusCode }
+          probeError,
+          raw: { httpStatus }
         };
       }
 
@@ -364,26 +391,142 @@ export async function registerInstances(app: FastifyInstance) {
       ? all.filter((t) => t.status?.toUpperCase() === filterStatus)
       : all;
 
-    // Surface body-component param count so the UI can show the right number
-    // of mapping slots without re-parsing on the client.
+    // Surface body-component param count + names + header media info so the
+    // UI can render the right slots without re-parsing on the client.
     const enriched = filtered.map((t) => {
       const body = (t.components ?? []).find(
         (c: any) => String(c.type).toUpperCase() === "BODY"
       ) as { text?: string } | undefined;
-      const placeholderCount = body?.text
-        ? Array.from(body.text.matchAll(/\{\{\s*\d+\s*\}\}/g)).length
-        : 0;
+      const header = (t.components ?? []).find(
+        (c: any) => String(c.type).toUpperCase() === "HEADER"
+      ) as { format?: string } | undefined;
+      // Templates may use positional `{{1}}` OR named `{{nome}}` placeholders
+      // (Meta's Q1-2024 named-params feature). We surface both so the UI can
+      // render a slot per placeholder and stamp `parameter_name` on send.
+      const positional = body?.text
+        ? Array.from(body.text.matchAll(/\{\{\s*(\d+)\s*\}\}/g)).map((m) => m[1])
+        : [];
+      const named = body?.text
+        ? Array.from(body.text.matchAll(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g)).map(
+            (m) => m[1]
+          )
+        : [];
+      const placeholderNames = named.length ? named : positional;
+      const headerFormat = (header?.format ?? "").toUpperCase();
       return {
         name: t.name,
         language: t.language,
         status: t.status,
         category: t.category ?? null,
         bodyText: body?.text ?? null,
-        bodyParamCount: placeholderCount
+        bodyParamCount: placeholderNames.length,
+        bodyParamNames: named.length ? named : null,
+        headerFormat:
+          headerFormat === "VIDEO" || headerFormat === "IMAGE" || headerFormat === "DOCUMENT"
+            ? (headerFormat as "VIDEO" | "IMAGE" | "DOCUMENT")
+            : headerFormat === "TEXT"
+            ? ("TEXT" as const)
+            : null
       };
     });
 
     return { templates: enriched };
+  });
+
+  // POST /whatsapp-instances/:id/test-send — fire one template message to a
+  // chosen recipient. Admin-only. Useful for proving end-to-end delivery
+  // before wiring a campaign. Bypasses the BullMQ queue and rate-limit.
+  app.post<{
+    Params: { id: string };
+    Body: {
+      to: string;
+      template: string;
+      language?: string;
+      // Shortcut for body-only positional params: ["foo","bar"] → [{type:text,text:foo},...]
+      params?: string[];
+      // Full Meta components array — wins over `params` when present.
+      // Lets the UI build header media + named body params.
+      components?: Array<Record<string, unknown>>;
+    };
+  }>("/whatsapp-instances/:id/test-send", adminGuard, async (req, reply) => {
+    const { to, template, language, params, components: rawComponents } =
+      req.body ?? ({} as any);
+    if (!to || !template) {
+      return reply.badRequest("to and template are required");
+    }
+    const db = getDb();
+    const row = await db.query.whatsappInstances.findFirst({
+      where: eq(schema.whatsappInstances.id, req.params.id)
+    });
+    if (!row) return reply.notFound();
+    if (row.provider !== "meta") {
+      return reply.badRequest("test-send only wired for meta provider here");
+    }
+    const cfg = decryptJson(
+      row.configJson as Record<string, unknown>,
+      config.ENCRYPTION_KEY
+    ) as { phoneNumberId?: string; accessToken?: string; token?: string };
+    const phoneNumberId = cfg.phoneNumberId;
+    const accessToken = cfg.accessToken ?? cfg.token;
+    if (!phoneNumberId || !accessToken) {
+      return reply.badRequest("instance config missing phoneNumberId or accessToken");
+    }
+    const { request } = await import("undici");
+    let components: Array<Record<string, unknown>>;
+    if (Array.isArray(rawComponents) && rawComponents.length) {
+      components = rawComponents;
+    } else if ((params ?? []).length) {
+      components = [
+        {
+          type: "body",
+          parameters: (params ?? []).map((text) => ({ type: "text", text }))
+        }
+      ];
+    } else {
+      components = [];
+    }
+    const payload: Record<string, unknown> = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: to.replace(/^\+/, ""),
+      type: "template",
+      template: {
+        name: template,
+        language: { code: language ?? "pt_BR" },
+        ...(components.length ? { components } : {})
+      }
+    };
+    const res = await request(
+      `https://graph.facebook.com/v19.0/${encodeURIComponent(phoneNumberId)}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      }
+    );
+    const responseBody = await res.body.json().catch(() => ({}));
+
+    // Surface common silent-failure causes alongside the raw response so the
+    // UI can show actionable hints instead of a generic "accepted" lie.
+    const phoneInfoRes = await request(
+      `https://graph.facebook.com/v19.0/${encodeURIComponent(phoneNumberId)}` +
+        `?fields=name_status,quality_rating,account_mode,code_verification_status`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    ).catch(() => null);
+    const phoneInfo = phoneInfoRes
+      ? await phoneInfoRes.body.json().catch(() => ({}))
+      : {};
+
+    return reply.code(res.statusCode).send({
+      httpStatus: res.statusCode,
+      ok: res.statusCode >= 200 && res.statusCode < 300,
+      payloadSent: payload,
+      response: responseBody,
+      senderHealth: phoneInfo
+    });
   });
 
   app.delete<{ Params: { id: string } }>("/whatsapp-instances/:id", adminGuard, async (req, reply) => {

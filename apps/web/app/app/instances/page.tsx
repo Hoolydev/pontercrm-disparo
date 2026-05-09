@@ -121,6 +121,10 @@ export default function InstancesPage() {
     | { id: string; verifyToken: string | null; number: string }
     | null
   >(null);
+  const [testSendInst, setTestSendInst] = useState<
+    | { id: string; number: string }
+    | null
+  >(null);
 
   function changeProvider(p: Provider) {
     setProvider(p);
@@ -180,10 +184,16 @@ export default function InstancesPage() {
     }
   });
 
+  const [probeErrors, setProbeErrors] = useState<Record<string, string | null>>({});
   const refreshStatusMutation = useMutation({
     mutationFn: (id: string) =>
-      api.post<{ status: string }>(`/whatsapp-instances/${id}/refresh-status`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["instances"] })
+      api.post<{ status: string; probeError?: string | null; raw?: { httpStatus?: number } }>(
+        `/whatsapp-instances/${id}/refresh-status`
+      ),
+    onSuccess: (res, id) => {
+      qc.invalidateQueries({ queryKey: ["instances"] });
+      setProbeErrors((prev) => ({ ...prev, [id]: res.probeError ?? null }));
+    }
   });
 
   const fieldsValid = PROVIDER_FIELD_SPECS[provider].every(
@@ -332,6 +342,15 @@ export default function InstancesPage() {
         />
       )}
 
+      {/* Meta test-send modal — pick template, fill params, fire one message */}
+      {testSendInst && (
+        <MetaTestSendModal
+          id={testSendInst.id}
+          number={testSendInst.number}
+          onClose={() => setTestSendInst(null)}
+        />
+      )}
+
       {/* QR Modal (uazapi only) */}
       {qrData && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -450,6 +469,15 @@ export default function InstancesPage() {
                         ? "Verificando…"
                         : "↻ Verificar conexão"}
                     </button>
+                    <button
+                      onClick={() =>
+                        setTestSendInst({ id: inst.id, number: inst.number })
+                      }
+                      className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                      title="Disparar um template aprovado para um número de teste"
+                    >
+                      Enviar teste
+                    </button>
                   </>
                 )}
                 {inst.provider === "uazapi" && (
@@ -495,9 +523,33 @@ export default function InstancesPage() {
                   <p className="mt-2 text-[11px] text-red-600">
                     {refreshStatusMutation.error instanceof Error
                       ? refreshStatusMutation.error.message
-                      : "erro ao consultar Uazapi"}
+                      : "erro ao consultar provedor"}
                   </p>
                 )}
+              {probeErrors[inst.id] && inst.status === "disconnected" && (
+                <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700 break-words">
+                  <p className="font-medium mb-0.5">Motivo retornado pela Graph API:</p>
+                  <code className="font-mono whitespace-pre-wrap break-all">
+                    {probeErrors[inst.id]}
+                  </code>
+                  <ul className="mt-1.5 list-disc pl-4 space-y-0.5 text-red-600">
+                    <li>
+                      <code>190 / OAuthException</code> → access token expirado ou inválido
+                    </li>
+                    <li>
+                      <code>200 / 10</code> → token sem permissão{" "}
+                      <code>whatsapp_business_messaging</code>/
+                      <code>whatsapp_business_management</code>, ou System User
+                      não foi atribuído ao número/WABA
+                    </li>
+                    <li>
+                      <code>100 / Unsupported get</code> → phoneNumberId inválido
+                      (verifique se não colou o WABA ID ou o número de telefone
+                      em vez do <em>Phone Number ID</em>)
+                    </li>
+                  </ul>
+                </div>
+              )}
             </div>
           ))}
           {data?.instances.filter(i => !(i.configJson as any).__error).length === 0 && (
@@ -671,6 +723,379 @@ function MetaWebhookModal({
           >
             Fechar
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type TemplateComponent = {
+  type: "HEADER" | "BODY" | "FOOTER" | "BUTTONS" | string;
+  format?: "TEXT" | "VIDEO" | "IMAGE" | "DOCUMENT";
+  text?: string;
+  example?: {
+    body_text_named_params?: Array<{ param_name: string; example: string }>;
+    body_text?: string[][];
+    header_handle?: string[];
+    header_text?: string[];
+  };
+  buttons?: Array<{ type: string; text: string }>;
+};
+
+type ApprovedTemplate = {
+  name: string;
+  language: string;
+  status: string;
+  category: string | null;
+  bodyText: string | null;
+  bodyParamCount: number;
+  // We re-fetch the full template separately to get raw components for the
+  // test-send mapping. This list endpoint only returns the lite shape.
+};
+
+type FullTemplate = {
+  name: string;
+  language: string;
+  status: string;
+  category: string;
+  components: TemplateComponent[];
+};
+
+function MetaTestSendModal({
+  id,
+  number,
+  onClose
+}: {
+  id: string;
+  number: string;
+  onClose: () => void;
+}) {
+  const [to, setTo] = useState("");
+  const [selectedName, setSelectedName] = useState<string>("");
+  const [headerMediaUrl, setHeaderMediaUrl] = useState("");
+  const [bodyParams, setBodyParams] = useState<Record<string, string>>({});
+  const [headerTextParams, setHeaderTextParams] = useState<Record<string, string>>({});
+  const [response, setResponse] = useState<unknown>(null);
+
+  // Fetch the lite list of approved templates for the dropdown.
+  const tplsQuery = useQuery({
+    queryKey: ["meta-templates", id],
+    queryFn: () =>
+      api.get<{ templates: ApprovedTemplate[] }>(
+        `/whatsapp-instances/${id}/meta-templates?status=APPROVED`
+      )
+  });
+
+  // Fetch full component breakdown for the picked template (so we know whether
+  // to render header media input, named-param inputs, etc.).
+  const fullTplQuery = useQuery({
+    enabled: !!selectedName,
+    queryKey: ["meta-template-full", id, selectedName],
+    queryFn: async () => {
+      const list = await api.get<{ templates: ApprovedTemplate[] }>(
+        `/whatsapp-instances/${id}/meta-templates`
+      );
+      return list.templates.find((t) => t.name === selectedName) ?? null;
+    }
+  });
+
+  // Re-derive body placeholders from the lite shape (matches /meta-templates).
+  const liteSelected = tplsQuery.data?.templates.find(
+    (t) => t.name === selectedName
+  );
+  const bodyText = liteSelected?.bodyText ?? "";
+  const namedPlaceholders = Array.from(
+    bodyText.matchAll(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g)
+  ).map((m) => m[1]);
+  const positionalCount = namedPlaceholders.length
+    ? 0
+    : Array.from(bodyText.matchAll(/\{\{\s*(\d+)\s*\}\}/g)).length;
+
+  // Header media is needed when the template has a HEADER component with
+  // VIDEO/IMAGE/DOCUMENT format. We can't tell from the lite shape, so heuristic:
+  // ask the user to fill if the template is the well-known mensagem_nativa,
+  // or always show the optional input when picked. The full fetch isn't wired
+  // server-side for components (out of scope), so we use a free-text URL input
+  // and let the API surface the Meta error if mandatory.
+  const sendMutation = useMutation({
+    mutationFn: async () => {
+      if (!liteSelected) throw new Error("template not selected");
+      const components: Array<Record<string, unknown>> = [];
+      if (headerMediaUrl.trim()) {
+        const url = headerMediaUrl.trim();
+        const ext = url.split("?")[0].split(".").pop()?.toLowerCase() ?? "";
+        const mediaType = ["mp4", "mov", "3gp"].includes(ext)
+          ? "video"
+          : ["jpg", "jpeg", "png", "webp"].includes(ext)
+          ? "image"
+          : "document";
+        components.push({
+          type: "header",
+          parameters: [{ type: mediaType, [mediaType]: { link: url } }]
+        });
+      }
+      const headerTextKeys = Object.keys(headerTextParams).filter(
+        (k) => headerTextParams[k]
+      );
+      if (headerTextKeys.length) {
+        components.push({
+          type: "header",
+          parameters: headerTextKeys.map((k) => ({
+            type: "text",
+            text: headerTextParams[k]
+          }))
+        });
+      }
+      if (namedPlaceholders.length) {
+        components.push({
+          type: "body",
+          parameters: namedPlaceholders.map((name) => ({
+            type: "text",
+            parameter_name: name,
+            text: bodyParams[name] ?? ""
+          }))
+        });
+      } else if (positionalCount > 0) {
+        components.push({
+          type: "body",
+          parameters: Array.from({ length: positionalCount }, (_, i) => ({
+            type: "text",
+            text: bodyParams[String(i + 1)] ?? ""
+          }))
+        });
+      }
+      const res = await api.post(`/whatsapp-instances/${id}/test-send`, {
+        to: to.trim(),
+        template: liteSelected.name,
+        language: liteSelected.language,
+        components
+      });
+      return res;
+    },
+    onSuccess: (res) => setResponse(res),
+    onError: (err) => setResponse({ error: err instanceof Error ? err.message : String(err) })
+  });
+
+  const r = response as
+    | {
+        ok?: boolean;
+        httpStatus?: number;
+        response?: { messages?: Array<{ id: string }>; error?: { message?: string; code?: number } };
+        senderHealth?: {
+          name_status?: string;
+          quality_rating?: string;
+          account_mode?: string;
+        };
+        error?: string;
+      }
+    | null;
+
+  const senderWarning =
+    r?.senderHealth?.name_status &&
+    r.senderHealth.name_status !== "APPROVED" &&
+    r.senderHealth.name_status !== "AVAILABLE_WITHOUT_REVIEW"
+      ? `Display name está ${r.senderHealth.name_status} — Meta vai aceitar (status accepted) mas não entrega até o nome ser aprovado.`
+      : null;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl p-6 max-w-2xl w-full shadow-xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h2 className="text-base font-semibold text-neutral-900">
+              Enviar template de teste
+            </h2>
+            <p className="text-xs text-neutral-500 mt-0.5">
+              Instância {number} — dispara uma única mensagem direto na Graph
+              API, sem passar pela fila/rate-limit.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-neutral-400 hover:text-neutral-600 text-lg leading-none"
+            aria-label="Fechar"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-neutral-600 mb-1">
+              Destinatário (E.164)
+            </label>
+            <input
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+              placeholder="+5562982540748"
+              className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm font-mono"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-neutral-600 mb-1">
+              Template aprovado
+            </label>
+            {tplsQuery.isLoading ? (
+              <p className="text-xs text-neutral-400">Carregando…</p>
+            ) : tplsQuery.isError ? (
+              <p className="text-xs text-red-600">
+                Falha ao listar templates: {String(tplsQuery.error)}
+              </p>
+            ) : (
+              <select
+                value={selectedName}
+                onChange={(e) => {
+                  setSelectedName(e.target.value);
+                  setBodyParams({});
+                  setHeaderTextParams({});
+                  setHeaderMediaUrl("");
+                  setResponse(null);
+                }}
+                className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+              >
+                <option value="">— escolha —</option>
+                {tplsQuery.data?.templates.map((t) => (
+                  <option key={`${t.name}:${t.language}`} value={t.name}>
+                    {t.name} [{t.language}] — {t.bodyParamCount} param(s)
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {liteSelected && (
+            <>
+              {liteSelected.bodyText && (
+                <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-700 whitespace-pre-wrap">
+                  <span className="font-medium text-neutral-500">Body:</span>{" "}
+                  {liteSelected.bodyText}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-medium text-neutral-600 mb-1">
+                  Header media URL (preencha se o template tem HEADER de vídeo/imagem/PDF)
+                </label>
+                <input
+                  value={headerMediaUrl}
+                  onChange={(e) => setHeaderMediaUrl(e.target.value)}
+                  placeholder="https://exemplo.com/video.mp4"
+                  className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm font-mono"
+                />
+                <p className="mt-1 text-[10px] text-neutral-400">
+                  Detecta tipo pela extensão (mp4/mov→video, jpg/png/webp→image,
+                  outros→document). URL precisa ser pública.
+                </p>
+              </div>
+
+              {namedPlaceholders.length > 0 && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium text-neutral-600">
+                    Body params (named)
+                  </label>
+                  {namedPlaceholders.map((name) => (
+                    <div key={name}>
+                      <p className="text-[11px] text-neutral-500 mb-0.5">
+                        <code className="font-mono">{`{{${name}}}`}</code>
+                      </p>
+                      <input
+                        value={bodyParams[name] ?? ""}
+                        onChange={(e) =>
+                          setBodyParams({ ...bodyParams, [name]: e.target.value })
+                        }
+                        className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+                        placeholder={`valor para ${name}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {positionalCount > 0 && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium text-neutral-600">
+                    Body params (posicional)
+                  </label>
+                  {Array.from({ length: positionalCount }, (_, i) => i + 1).map((n) => (
+                    <div key={n}>
+                      <p className="text-[11px] text-neutral-500 mb-0.5">
+                        <code className="font-mono">{`{{${n}}}`}</code>
+                      </p>
+                      <input
+                        value={bodyParams[String(n)] ?? ""}
+                        onChange={(e) =>
+                          setBodyParams({ ...bodyParams, [String(n)]: e.target.value })
+                        }
+                        className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          <div className="flex gap-2 pt-2">
+            <button
+              onClick={() => sendMutation.mutate()}
+              disabled={
+                !to.trim() || !selectedName || sendMutation.isPending
+              }
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+            >
+              {sendMutation.isPending ? "Enviando…" : "Enviar"}
+            </button>
+            <button
+              onClick={onClose}
+              className="rounded-lg border border-neutral-200 px-4 py-2 text-sm text-neutral-600 hover:bg-neutral-50"
+            >
+              Fechar
+            </button>
+          </div>
+
+          {r && (
+            <div
+              className={`rounded-lg border px-3 py-2.5 text-xs ${
+                r.ok
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : "border-red-200 bg-red-50 text-red-700"
+              }`}
+            >
+              <p className="font-medium mb-1">
+                {r.ok
+                  ? `Aceito pela Meta (HTTP ${r.httpStatus})`
+                  : `Falhou (HTTP ${r.httpStatus ?? "?"})`}
+              </p>
+              {r.response?.messages?.[0]?.id && (
+                <p className="font-mono break-all">
+                  wamid: {r.response.messages[0].id}
+                </p>
+              )}
+              {r.response?.error?.message && (
+                <p className="font-mono break-all">
+                  Meta error ({r.response.error.code}):{" "}
+                  {r.response.error.message}
+                </p>
+              )}
+              {r.error && <p className="font-mono break-all">{r.error}</p>}
+              {senderWarning && (
+                <div className="mt-2 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-amber-800">
+                  ⚠️ {senderWarning}
+                </div>
+              )}
+              {r.senderHealth && (
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-[11px] text-neutral-600 hover:text-neutral-900">
+                    Saúde do remetente
+                  </summary>
+                  <pre className="mt-1 text-[10px] text-neutral-700">
+                    {JSON.stringify(r.senderHealth, null, 2)}
+                  </pre>
+                </details>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -229,7 +229,13 @@ export async function processOutboundMessage(
             to: conv.lead.phone,
             name: msg.metaTemplatePayload.name,
             language: msg.metaTemplatePayload.language,
-            bodyParams: msg.metaTemplatePayload.bodyParams
+            bodyParams: msg.metaTemplatePayload.bodyParams,
+            ...(msg.metaTemplatePayload.bodyParamNames
+              ? { bodyParamNames: msg.metaTemplatePayload.bodyParamNames }
+              : {}),
+            ...(msg.metaTemplatePayload.header
+              ? { header: msg.metaTemplatePayload.header }
+              : {})
           },
           config
         )
