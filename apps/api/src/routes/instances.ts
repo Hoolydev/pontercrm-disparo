@@ -529,6 +529,84 @@ export async function registerInstances(app: FastifyInstance) {
     });
   });
 
+  // POST /whatsapp-instances/:id/upload-media — proxy a multipart file upload
+  // to the Meta Graph `/{phone_number_id}/media` endpoint, returning the
+  // resulting media_id. Used by the campaign editor to bind a header video
+  // (or image/document) to a Meta HSM template without leaving the UI.
+  // Meta retains the asset for ~30 days; users re-upload when it expires.
+  app.post<{ Params: { id: string } }>(
+    "/whatsapp-instances/:id/upload-media",
+    adminGuard,
+    async (req, reply) => {
+      const data = await req.file().catch(() => null);
+      if (!data) return reply.badRequest("missing file");
+      const buf = await data.toBuffer();
+      if (buf.length === 0) return reply.badRequest("empty file");
+
+      const mime = data.mimetype || "application/octet-stream";
+      // Meta only accepts a curated allowlist per asset class; we let the
+      // Graph API reject unsupported types so we don't drift from their docs.
+      const allowed = /^(video|image|application|audio)\//.test(mime);
+      if (!allowed) return reply.badRequest(`unsupported mimetype: ${mime}`);
+
+      const db = getDb();
+      const row = await db.query.whatsappInstances.findFirst({
+        where: eq(schema.whatsappInstances.id, req.params.id)
+      });
+      if (!row) return reply.notFound();
+      if (row.provider !== "meta") {
+        return reply.badRequest("upload-media only supported for meta provider");
+      }
+      const cfg = decryptJson(
+        row.configJson as Record<string, unknown>,
+        config.ENCRYPTION_KEY
+      ) as { phoneNumberId?: string; accessToken?: string; token?: string };
+      const phoneNumberId = cfg.phoneNumberId;
+      const accessToken = cfg.accessToken ?? cfg.token;
+      if (!phoneNumberId || !accessToken) {
+        return reply.badRequest("instance config missing phoneNumberId or accessToken");
+      }
+
+      const { request, FormData } = await import("undici");
+      const fd = new FormData();
+      fd.append("messaging_product", "whatsapp");
+      fd.append("type", mime);
+      // Node's global File is available in Node 18+; FormData in undici
+      // requires a Blob/File for binary bodies (passing a Buffer alone
+      // gets serialized as a string, which Meta rejects).
+      const file = new File([new Uint8Array(buf)], data.filename ?? "upload", {
+        type: mime
+      });
+      fd.append("file", file);
+
+      const res = await request(
+        `https://graph.facebook.com/v19.0/${encodeURIComponent(phoneNumberId)}/media`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${accessToken}` },
+          body: fd
+        }
+      );
+      const body = (await res.body.json().catch(() => ({}))) as {
+        id?: string;
+        error?: { message?: string; code?: number };
+      };
+      if (res.statusCode >= 400 || !body.id) {
+        return reply.code(502).send({
+          error: "graph_api_error",
+          httpStatus: res.statusCode,
+          response: body
+        });
+      }
+      return {
+        id: body.id,
+        size: buf.length,
+        mimetype: mime,
+        filename: data.filename ?? null
+      };
+    }
+  );
+
   app.delete<{ Params: { id: string } }>("/whatsapp-instances/:id", adminGuard, async (req, reply) => {
     const db = getDb();
     await db.delete(schema.whatsappInstances).where(eq(schema.whatsappInstances.id, req.params.id));
