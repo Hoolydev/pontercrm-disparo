@@ -976,6 +976,139 @@ function BasicsCard({
   );
 }
 
+function HeaderMediaInput({
+  kind,
+  value,
+  onChange,
+  instanceId
+}: {
+  kind: "video" | "image" | "document";
+  value: MetaTemplateHeaderSpec | null;
+  onChange: (next: MetaTemplateHeaderSpec | null) => void;
+  instanceId: string | null;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  async function handleFile(file: File) {
+    if (!instanceId) {
+      setUploadError("instância Meta não encontrada");
+      return;
+    }
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const url =
+        (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3333") +
+        `/whatsapp-instances/${instanceId}/upload-media`;
+      const token =
+        (typeof window !== "undefined" && localStorage.getItem("pointer_token")) || "";
+      const res = await fetch(url, {
+        method: "POST",
+        body: fd,
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.id) {
+        const detail =
+          body?.response?.error?.message ?? body?.error ?? `HTTP ${res.status}`;
+        throw new Error(String(detail));
+      }
+      onChange({ type: kind, source: "mediaId", value: body.id });
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "erro no upload");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  const acceptByKind: Record<typeof kind, string> = {
+    video: "video/mp4,video/3gpp,.mp4,.3gp",
+    image: "image/jpeg,image/png,.jpg,.jpeg,.png",
+    document: "application/pdf,.pdf"
+  };
+
+  return (
+    <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+      <p className="text-[11px] font-medium text-amber-900">
+        Header de {kind} obrigatório
+      </p>
+      <p className="text-[10px] text-amber-700">
+        Subir o arquivo aqui é o caminho mais simples — fazemos o upload pra
+        Meta e gravamos o <code>media_id</code> retornado. Alternativas:{" "}
+        <strong>link público HTTPS</strong> (qualquer CDN seu) ou um{" "}
+        <strong>media_id</strong> que você já gerou. <em>media_id</em> da Meta
+        vence em ~30 dias e precisa ser regerado.
+      </p>
+
+      <div className="flex gap-2 flex-wrap">
+        <input
+          ref={fileRef}
+          type="file"
+          accept={acceptByKind[kind]}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) handleFile(f);
+            e.target.value = "";
+          }}
+          className="hidden"
+        />
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={uploading || !instanceId}
+          className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+        >
+          {uploading ? "Enviando…" : `📤 Subir ${kind} (recomendado)`}
+        </button>
+        <select
+          value={value?.source ?? "link"}
+          onChange={(e) =>
+            onChange({
+              type: kind,
+              source: e.target.value as "link" | "mediaId",
+              value: value?.value ?? ""
+            })
+          }
+          className="rounded-lg border border-amber-300 px-2 py-1.5 text-xs"
+        >
+          <option value="link">Link (URL pública)</option>
+          <option value="mediaId">media_id já gerado</option>
+        </select>
+        <input
+          value={value?.value ?? ""}
+          onChange={(e) =>
+            onChange({
+              type: kind,
+              source: value?.source ?? "link",
+              value: e.target.value
+            })
+          }
+          placeholder={
+            value?.source === "mediaId"
+              ? "1666620241334804"
+              : "https://exemplo.com/video.mp4"
+          }
+          className="flex-1 min-w-[200px] rounded-lg border border-amber-300 px-2 py-1.5 text-xs font-mono"
+        />
+      </div>
+
+      {value?.source === "mediaId" && value.value && (
+        <p className="text-[10px] text-amber-700">
+          ✓ media_id <code>{value.value}</code> · vence em ~30 dias após o
+          upload (re-suba o arquivo quando começar a falhar)
+        </p>
+      )}
+      {uploadError && (
+        <p className="text-[11px] text-red-700">⚠️ {uploadError}</p>
+      )}
+    </div>
+  );
+}
+
 function MetaTemplateSection({
   camp,
   metaInstanceId,
@@ -1136,51 +1269,12 @@ function MetaTemplateSection({
           )}
 
           {selected && headerKind && (
-            <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
-              <p className="text-[11px] font-medium text-amber-900">
-                Header de {headerKind} obrigatório
-              </p>
-              <p className="text-[10px] text-amber-700">
-                A Meta exige a mídia do header para enviar este template. Use{" "}
-                <strong>media_id</strong> (mais confiável — recomendado fazer
-                upload no Meta via <code>POST /media</code> e colar o id) ou um{" "}
-                <strong>link público HTTPS</strong> (Meta CDN tenta baixar; URLs
-                de hotlink, ex.: <code>scontent.whatsapp.net</code>, podem
-                falhar silenciosamente).
-              </p>
-              <div className="flex gap-2">
-                <select
-                  value={draftHeader?.source ?? "link"}
-                  onChange={(e) =>
-                    setDraftHeader({
-                      type: headerKind,
-                      source: e.target.value as "link" | "mediaId",
-                      value: draftHeader?.value ?? ""
-                    })
-                  }
-                  className="rounded-lg border border-amber-300 px-2 py-1.5 text-xs"
-                >
-                  <option value="link">Link (URL pública)</option>
-                  <option value="mediaId">media_id (upload Meta)</option>
-                </select>
-                <input
-                  value={draftHeader?.value ?? ""}
-                  onChange={(e) =>
-                    setDraftHeader({
-                      type: headerKind,
-                      source: draftHeader?.source ?? "link",
-                      value: e.target.value
-                    })
-                  }
-                  placeholder={
-                    draftHeader?.source === "mediaId"
-                      ? "1666620241334804"
-                      : "https://exemplo.com/video.mp4"
-                  }
-                  className="flex-1 rounded-lg border border-amber-300 px-2 py-1.5 text-xs font-mono"
-                />
-              </div>
-            </div>
+            <HeaderMediaInput
+              kind={headerKind}
+              value={draftHeader}
+              onChange={setDraftHeader}
+              instanceId={metaInstanceId}
+            />
           )}
 
           {selected && expectedSlots > 0 && (
