@@ -3,10 +3,114 @@ import { schema } from "@pointer/db";
 import type { Database } from "@pointer/db";
 import { getQueues, withLock } from "@pointer/queue";
 import type { InboundMessageJob } from "@pointer/queue";
-import { newId, sha256 } from "@pointer/shared";
+import { newId, normalizeE164, sha256 } from "@pointer/shared";
 import { and, eq, ne, sql } from "drizzle-orm";
 import type { Redis } from "ioredis";
 import type { Logger } from "pino";
+
+// Auto-creates a lead + conversation for unknown inbound numbers (API oficial / Meta).
+async function findOrCreateConversation(
+  db: Database,
+  instanceId: string,
+  fromPhone: string,
+  logger: Logger
+) {
+  // Normalize to E.164 so it matches regardless of how the provider formats it.
+  const phone = normalizeE164(fromPhone);
+
+  // Try lead by phone first (any source).
+  let lead = await db.query.leads.findFirst({
+    where: eq(schema.leads.phone, phone)
+  });
+
+  // Resolve an active conversation for this lead + instance.
+  let conv = lead
+    ? await db.query.conversations.findFirst({
+        where: sql`
+          ${schema.conversations.whatsappInstanceId} = ${instanceId}
+          AND ${schema.conversations.leadId} = ${lead.id}
+        `,
+        with: { lead: true }
+      })
+    : null;
+
+  if (conv) return conv;
+
+  // --- Auto-creation path ---
+  logger.info({ instanceId, phone }, "inbound: unknown number — auto-creating lead + conversation");
+
+  // Fetch required references in parallel.
+  const [brokerRow, inboundAgent, defaultStage, directSource] = await Promise.all([
+    db.query.brokers.findFirst({ columns: { id: true } }),
+    db.query.agents.findFirst({
+      where: and(eq(schema.agents.active, true), eq(schema.agents.type, "inbound"))
+    }),
+    db.query.pipelineStages.findFirst({ columns: { id: true } }),
+    // Find or create the sentinel lead source used for direct WhatsApp inbounds.
+    db.query.leadSources.findFirst({
+      where: eq(schema.leadSources.name, "WhatsApp Direto")
+    })
+  ]);
+
+  // Upsert sentinel lead source (runs at most once per deployment).
+  let sourceId = directSource?.id;
+  if (!sourceId) {
+    const sid = newId();
+    await db
+      .insert(schema.leadSources)
+      .values({
+        id: sid,
+        type: "whatsapp_direct",
+        name: "WhatsApp Direto",
+        webhookSecret: newId(), // unused but NOT NULL
+        active: true
+      })
+      .onConflictDoNothing();
+    sourceId =
+      (await db.query.leadSources.findFirst({
+        where: eq(schema.leadSources.name, "WhatsApp Direto"),
+        columns: { id: true }
+      }))?.id ?? sid;
+  }
+
+  if (!lead) {
+    if (!defaultStage) {
+      logger.error({ phone }, "inbound: no pipeline stage found — cannot create lead");
+      return null;
+    }
+    const [newLead] = await db
+      .insert(schema.leads)
+      .values({
+        phone,
+        name: null,
+        email: null,
+        sourceId,
+        origin: "whatsapp_inbound",
+        pipelineStageId: defaultStage.id,
+        assignedBrokerId: brokerRow?.id ?? undefined
+      })
+      .returning();
+    lead = newLead!;
+  }
+
+  const convId = newId();
+  await db.insert(schema.conversations).values({
+    id: convId,
+    leadId: lead.id,
+    status: "ai_active",
+    mode: "inbound",
+    whatsappInstanceId: instanceId,
+    agentId: inboundAgent?.id ?? undefined,
+    assignedBrokerId: lead.assignedBrokerId ?? brokerRow?.id ?? undefined,
+    aiPaused: false,
+    lastMessageAt: new Date()
+  });
+
+  return db.query.conversations.findFirst({
+    where: eq(schema.conversations.id, convId),
+    with: { lead: true }
+  });
+}
 
 // CH import matches apps/api — keep in sync or extract to @pointer/queue
 const CH = { inbox: "inbox:updates" };
@@ -19,19 +123,11 @@ export async function processInboundMessage(
 ) {
   const { instanceId, fromPhone, content, mediaUrl, providerMessageId } = job;
 
-  // Find conversation by instance + lead phone
-  const conv = await db.query.conversations.findFirst({
-    where: sql`
-      ${schema.conversations.whatsappInstanceId} = ${instanceId}
-      AND ${schema.conversations.leadId} IN (
-        SELECT id FROM leads WHERE phone = ${fromPhone} LIMIT 1
-      )
-    `,
-    with: { lead: true }
-  });
+  // Find existing conversation or auto-create lead + conversation for new numbers.
+  const conv = await findOrCreateConversation(db, instanceId, fromPhone, logger);
 
   if (!conv) {
-    logger.warn({ instanceId, fromPhone }, "inbound: no conversation found — skipping");
+    logger.error({ instanceId, fromPhone }, "inbound: failed to create conversation — skipping");
     return;
   }
 
